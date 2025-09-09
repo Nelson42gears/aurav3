@@ -1,13 +1,27 @@
-# 🚀 Aura – Unified MCP System (SSE Transport)
+# 🚀 Aura – Unified MCP System (HTTP REST, Standard MCP)
 
-Production-grade Unified MCP system with a single MCP Server exposing Freshdesk, Intercom, and Unified tools over SSE, bridged by a Backend Proxy and a React client for real-time interaction.
+Production-grade Unified MCP system exposing Freshdesk, Intercom, and Unified tools over Standard MCP HTTP endpoints, bridged by a Backend Proxy and a React client for real-time interaction.
 
-This repository hosts the end-to-end stack: React Client, Backend Proxy, Unified MCP Server, n8n MCP Server, and infra services (PostgreSQL, Redis) – all with fixed ports and strict security controls.
+This repository hosts the end-to-end stack: React Client, Backend Proxy, MCP Servers, n8n MCP Server, and infra services (PostgreSQL, Redis) – all with fixed ports and strict security controls.
+
+---
+
+## 📌 Project Status (2025-09-09)
+
+- Standard MCP HTTP integration is live. The Backend Proxy now communicates with MCP servers via REST (`/tools`, `/tools/call`) instead of SSE.
+- Advanced prompting + semantic tool selection is enabled (Gemini-based), with robust parameter extraction and error handling.
+- Tool inventory: 196 tools loaded (Freshdesk, Intercom, n8n, utilities) and callable through the proxy.
+- Security hardening in place:
+  - GitHub Push Protection compliant. Historical secret was purged and token rotated.
+  - `.gitignore` updated to exclude local tooling artifacts (`bfg.jar`, `sensitive.txt`).
+  - Pre-commit secret scanning configured via `detect-secrets`.
+
+See sections below for architecture, ports, health checks, and usage. Notes that mention SSE are legacy; use the HTTP REST guidance in this document.
 
 ## 🎯 Current Focus
 
-✅ Unified MCP Server over SSE  
-✅ Backend Proxy bridging HTTP ⇄ SSE  
+✅ Standard MCP HTTP REST integration  
+✅ Backend Proxy bridging client HTTP ⇄ MCP HTTP  
 ✅ React Client with real-time updates  
 ✅ Fixed Port Configuration (do not change)
 
@@ -17,8 +31,8 @@ This repository hosts the end-to-end stack: React Client, Backend Proxy, Unified
 | Service | Port | Purpose |
 |---------|------|---------|
 | React Client | `9200` | Web UI (Nginx) |
-| Backend Proxy | `9100` | HTTP API bridge to MCP (SSE) |
-| Unified MCP Server | `9000` | SSE endpoint `/sse/` for tools |
+| Backend Proxy | `9100` | HTTP API bridge to MCP (HTTP REST) |
+| Unified MCP Server | `9000` | Standard MCP HTTP (`/tools`, `/tools/call`) |
 | n8n MCP Server | `3001` | n8n workflow integration |
 | n8n (Main App) | `5678` | n8n web UI & workflow engine |
 | PostgreSQL | `5432` | Data persistence |
@@ -27,9 +41,9 @@ This repository hosts the end-to-end stack: React Client, Backend Proxy, Unified
 | (Policy) SureMDM MCP Server | `7000` | Reserved per policy |
 
 ### Core Features
-- Unified MCP tools (Freshdesk 105, Intercom 86, Unified 5) exposed via SSE
-- Backend Proxy translates HTTP requests from UI to MCP SSE tool calls
-- Real-time React client with SSE streaming
+- Unified MCP tools (Freshdesk, Intercom, utilities) exposed via Standard MCP HTTP
+- Backend Proxy translates HTTP requests from UI to MCP HTTP tool calls
+- Real-time React client with live updates
 - Health endpoints for infra and detailed MCP state
 - Dockerized with strict fixed ports and health checks
 
@@ -38,16 +52,16 @@ This repository hosts the end-to-end stack: React Client, Backend Proxy, Unified
 ## 🔁 Unified MCP Flow (Current)
 
 1) React Client (`9200`) → Backend Proxy HTTP (`9100`)  
-2) Backend Proxy → MCP Server SSE (`9000/sse/`)  
-3) MCP Server → Platform Adapters (Freshdesk/Intercom) → External APIs  
+2) Backend Proxy → MCP Servers HTTP REST (`/tools`, `/tools/call`)  
+3) MCP Servers → Platform Adapters (Freshdesk/Intercom) → External APIs  
 4) Responses stream back through the same chain to the UI
 
 Health model:  
 - Basic: `GET http://localhost:9100/health` → `{ "status": "ok" }`  
 - Detailed: `GET http://localhost:9100/api/health` → adapters, totals, rate limits
 
-SSE transport:  
-- MCP Server SSE endpoint: `http://localhost:9000/sse/`
+MCP transport:  
+- Standard HTTP REST: `/tools` (list), `/tools/call` (execute)
 
 ---
 
@@ -64,14 +78,14 @@ curl -s http://localhost:9100/health
 curl -s http://localhost:9100/api/health
 ```
 
-Verify MCP SSE endpoint (200 OK, stream):
+List tools via Backend Proxy (source of truth):
 ```bash
-curl -i --max-time 2 http://localhost:9000/sse/
+curl -s http://localhost:9100/api/tools | jq '.tools | length'
 ```
 
 ---
 
-## 🧩 Backend Proxy API (HTTP → MCP SSE)
+## 🧩 Backend Proxy API (HTTP → MCP HTTP)
 
 - __List tools__: `GET http://localhost:9100/api/tools`
   - Returns the currently registered MCP tools as seen by the proxy (source of truth for names)
