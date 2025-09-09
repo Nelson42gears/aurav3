@@ -1,0 +1,247 @@
+[
+  {
+    "name": "42Gears-RAG-Gemini-API",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "rag-gemini",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "webhook-trigger",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1,
+        "position": [300, 300]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "validation-query",
+                "leftValue": "={{ $json.query }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEmpty"
+                }
+              }
+            ],
+            "combinator": "and"
+          }
+        },
+        "id": "validate-input",
+        "name": "Validate Input",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [500, 300]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://localhost:8001/api/v2/tenants/default_tenant/databases/default_database/collections/01c7d9aa-d508-4c15-93ec-202ba8dbed05/query",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "body",
+                "value": "={ \"query_texts\": [\"{{$json.query}}\"], \"n_results\": {{$json.n_results || 5}} }"
+              }
+            ]
+          },
+          "options": {
+            "timeout": 10000
+          }
+        },
+        "id": "chroma-query",
+        "name": "Query ChromaDB",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [700, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Process ChromaDB results\nconst results = $input.first().json;\n\nif (!results || !results.ids || results.ids.length === 0) {\n  return [{\n    json: {\n      success: false,\n      error: \"No relevant documents found\",\n      query: $input.first().json.query\n    }\n  }];\n}\n\n// Extract documents and metadata\nconst documents = results.documents[0];\nconst metadatas = results.metadatas[0];\nconst distances = results.distances[0];\n\n// Format context documents\nconst contextDocs = [];\nfor (let i = 0; i < documents.length; i++) {\n  contextDocs.push({\n    content: documents[i],\n    metadata: metadatas[i],\n    relevance: 1 - distances[i],  // Convert distance to relevance score\n    id: results.ids[0][i]\n  });\n}\n\n// Format context for RAG\nconst formattedContext = contextDocs.map((doc, index) => {\n  return `[Document ${index + 1}] ${doc.content}\\n\\nSource: ${doc.metadata.source || 'Unknown'}\\nCategory: ${doc.metadata.category || 'General'}`;\n});\n\nreturn [{\n  json: {\n    success: true,\n    query: $input.first().json.query,\n    context_documents: formattedContext,\n    raw_results: contextDocs\n  }\n}];"
+        },
+        "id": "process-results",
+        "name": "Process Results",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [900, 300]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-goog-api-key",
+                "value": "={{ $env.GEMINI_API_KEY }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "contents",
+                "value": "=[{\n  \"parts\": [{\n    \"text\": \"You are a helpful AI assistant for 42Gears. Answer the following question based on the provided context. If the answer cannot be found in the context, say so politely.\\n\\nContext:\\n{{ $json.context_documents.join('\\n\\n') }}\\n\\nQuestion: {{ $json.query }}\\n\\nAnswer:\"\n  }]\n}]"
+              },
+              {
+                "name": "generationConfig",
+                "value": "={\n  \"temperature\": {{ $json.temperature || 0.2 }},\n  \"maxOutputTokens\": {{ $json.max_tokens || 1024 }},\n  \"topP\": 0.95,\n  \"topK\": 40\n}"
+              }
+            ]
+          },
+          "options": {
+            "timeout": 30000
+          }
+        },
+        "id": "gemini-api",
+        "name": "Gemini API",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [1100, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Process Gemini API response\nconst response = $input.first().json;\nlet answer = \"\";\n\ntry {\n  if (response.candidates && response.candidates.length > 0) {\n    const candidate = response.candidates[0];\n    if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {\n      answer = candidate.content.parts[0].text;\n    }\n  }\n} catch (error) {\n  console.error('Error processing Gemini response:', error);\n}\n\n// Get context from previous node\nconst prevNodeData = $('Process Results').item.json;\n\nreturn [{\n  json: {\n    success: true,\n    query: prevNodeData.query,\n    answer: answer,\n    sources: prevNodeData.raw_results.map(doc => ({\n      title: doc.metadata.title || 'Untitled',\n      url: doc.metadata.url || '',\n      category: doc.metadata.category || 'General',\n      relevance: doc.relevance\n    })),\n    metadata: {\n      model: \"gemini-2.0-flash\",\n      timestamp: new Date().toISOString()\n    }\n  }\n}];"
+        },
+        "id": "format-response",
+        "name": "Format Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [1300, 300]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ $json }}"
+        },
+        "id": "respond-webhook",
+        "name": "Respond to Webhook",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [1500, 300]
+      },
+      {
+        "parameters": {
+          "filePath": "={{ '/home/nelson/nebula/Aura/logs/rag_queries.log' }}",
+          "fileContent": "={{ `[${new Date().toISOString()}] Query: ${$json.query}\\nAnswer: ${$json.answer}\\nSources: ${JSON.stringify($json.sources)}\\n\\n` }}",
+          "options": {
+            "append": true
+          }
+        },
+        "id": "log-query",
+        "name": "Log Query",
+        "type": "n8n-nodes-base.writeFile",
+        "typeVersion": 2,
+        "position": [1500, 500]
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Validate Input",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validate Input": {
+        "main": [
+          [
+            {
+              "node": "Query ChromaDB",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Query ChromaDB": {
+        "main": [
+          [
+            {
+              "node": "Process Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Process Results": {
+        "main": [
+          [
+            {
+              "node": "Gemini API",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Gemini API": {
+        "main": [
+          [
+            {
+              "node": "Format Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Response": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Log Query",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "active": false,
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "pinData": {},
+    "versionId": "",
+    "triggerCount": 0,
+    "tags": []
+  }
+]

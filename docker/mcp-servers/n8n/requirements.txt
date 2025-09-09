@@ -1,0 +1,19 @@
+# Production n8n MCP Server Requirements
+# MCP Protocol 2025-06-18 specification compliant
+
+# Core FastAPI and HTTP
+fastapi==0.108.0
+uvicorn[standard]==0.24.0
+httpx==0.25.2
+pydantic==2.5.1
+
+# Async and concurrency
+aiofiles==23.2.1
+
+# Logging and monitoring
+structlog==23.2.0
+python-json-logger==2.0.7
+
+# Development and utilities
+python-multipart==0.0.6
+python-dotenv==1.0.0

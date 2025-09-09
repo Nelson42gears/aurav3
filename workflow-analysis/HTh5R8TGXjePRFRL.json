@@ -1,0 +1,317 @@
+{
+  "createdAt": "2025-08-11T01:14:45.904Z",
+  "updatedAt": "2025-08-11T01:14:45.904Z",
+  "id": "HTh5R8TGXjePRFRL",
+  "name": "Support Ticket to Bug Report",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "path": "freshdesk-ticket-webhook",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      },
+      "id": "freshdesk-ticket-webhook",
+      "name": "Freshdesk Ticket Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bug-tag-detection",
+              "leftValue": "={{ $json.ticket.tags }}",
+              "rightValue": "bug",
+              "operator": {
+                "type": "array",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "ticket-status-check",
+              "leftValue": "={{ $json.ticket.status }}",
+              "rightValue": "2",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "validate-bug-ticket-criteria",
+      "name": "Validate Bug Ticket Criteria",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://{{ $credentials.freshdesk.domain }}.freshdesk.com/api/v2/tickets/{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "freshdeskApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Basic {{ $credentials.freshdesk.apiKey }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-complete-ticket-details",
+      "name": "Fetch Complete Ticket Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.atlassian.com/ex/jira/v1/issue",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "={\"project\":{\"key\":\"ENG\"},\"summary\":\"🐛 Bug Report: {{ $('Fetch Complete Ticket Details').item.json.subject }}\",\"description\":\"**Bug Report from Freshdesk Ticket**\\n\\n**Original Ticket:** #{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}\\n**Reporter:** {{ $('Fetch Complete Ticket Details').item.json.requester_email }}\\n**Priority:** {{ $('Fetch Complete Ticket Details').item.json.priority_text }}\\n**Created:** {{ $('Fetch Complete Ticket Details').item.json.created_at }}\\n\\n**Customer Description:**\\n{{ $('Fetch Complete Ticket Details').item.json.description_text }}\\n\\n**Freshdesk Link:** https://{{ $credentials.freshdesk.domain }}.freshdesk.com/a/tickets/{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}\\n\\n**Tags:** {{ $('Fetch Complete Ticket Details').item.json.tags.join(', ') }}\\n\\n---\\n*This bug report was automatically created from Freshdesk ticket.*\",\"issuetype\":{\"name\":\"Bug\"},\"priority\":{\"name\":\"Medium\"},\"assignee\":{\"name\":\"engineering-team-lead\"}}"
+            }
+          ]
+        }
+      },
+      "id": "create-jira-bug-report",
+      "name": "Create Jira Bug Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://{{ $credentials.freshdesk.domain }}.freshdesk.com/api/v2/tickets/{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "freshdeskApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Basic {{ $credentials.freshdesk.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "3"
+            },
+            {
+              "name": "notes",
+              "value": "🐛 **Bug Report Created in Engineering**\\n\\nA bug report has been automatically created in Jira for this issue.\\n\\n**Jira Ticket:** {{ $('Create Jira Bug Report').item.json.key }}\\n**Engineering Team:** Assigned\\n**Status:** Under Investigation\\n\\nWe'll keep you updated on the progress through this ticket."
+            }
+          ]
+        }
+      },
+      "id": "update-freshdesk-ticket-status",
+      "name": "Update Freshdesk Ticket Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://chat.googleapis.com/v1/spaces/support-alerts/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "🐛 **New Bug Report Created**\\n\\n**Freshdesk Ticket:** #{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}\\n**Jira Bug Report:** {{ $('Create Jira Bug Report').item.json.key }}\\n**Priority:** {{ $('Fetch Complete Ticket Details').item.json.priority_text }}\\n**Reporter:** {{ $('Fetch Complete Ticket Details').item.json.requester_email }}\\n\\n**Subject:** {{ $('Fetch Complete Ticket Details').item.json.subject }}"
+            },
+            {
+              "name": "cards",
+              "value": "=[{\"sections\":[{\"widgets\":[{\"textParagraph\":{\"text\":\"<b>Bug Details:</b><br>{{ $('Fetch Complete Ticket Details').item.json.description_text.substring(0, 200) }}...\"}},{\"buttons\":[{\"textButton\":{\"text\":\"View Freshdesk Ticket\",\"onClick\":{\"openLink\":{\"url\":\"https://{{ $credentials.freshdesk.domain }}.freshdesk.com/a/tickets/{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}\"}}}},{\"textButton\":{\"text\":\"View Jira Bug\",\"onClick\":{\"openLink\":{\"url\":\"https://{{ $credentials.jira.baseUrl }}/browse/{{ $('Create Jira Bug Report').item.json.key }}\"}}}}]}]}]}]"
+            }
+          ]
+        }
+      },
+      "id": "notify-support-team-google-chat",
+      "name": "Notify Support Team via Google Chat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "🐛 Bug escalated from Freshdesk to Engineering"
+            },
+            {
+              "name": "blocks",
+              "value": "=[{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"🐛 *New Bug Report Created*\\n\\n*{{ $('Fetch Complete Ticket Details').item.json.subject }}*\\n\\n*Priority:* {{ $('Fetch Complete Ticket Details').item.json.priority_text }}\\n*Reporter:* {{ $('Fetch Complete Ticket Details').item.json.requester_email }}\\n*Freshdesk ID:* #{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}\\n*Jira Bug:* <https://{{ $credentials.jira.baseUrl }}/browse/{{ $('Create Jira Bug Report').item.json.key }}|{{ $('Create Jira Bug Report').item.json.key }}>\"}},{\"type\":\"actions\",\"elements\":[{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"View Ticket\"},\"url\":\"https://{{ $credentials.freshdesk.domain }}.freshdesk.com/a/tickets/{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}\"},{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"View Bug Report\"},\"url\":\"https://{{ $credentials.jira.baseUrl }}/browse/{{ $('Create Jira Bug Report').item.json.key }}\"}]}]"
+            }
+          ]
+        }
+      },
+      "id": "notify-engineering-team-slack",
+      "name": "Notify Engineering Team via Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Freshdesk Ticket Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Bug Ticket Criteria",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Bug Ticket Criteria": {
+      "main": [
+        [
+          {
+            "node": "Fetch Complete Ticket Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Complete Ticket Details": {
+      "main": [
+        [
+          {
+            "node": "Create Jira Bug Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Jira Bug Report": {
+      "main": [
+        [
+          {
+            "node": "Update Freshdesk Ticket Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Freshdesk Ticket Status": {
+      "main": [
+        [
+          {
+            "node": "Notify Support Team via Google Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Support Team via Google Chat": {
+      "main": [
+        [
+          {
+            "node": "Notify Engineering Team via Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "1                                   ",
+  "triggerCount": 0,
+  "tags": []
+}

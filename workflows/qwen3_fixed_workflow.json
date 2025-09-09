@@ -1,0 +1,180 @@
+[
+  {
+    "name": "Qwen3-4B-Webhook-API",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "qwen-ai",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "webhook-001",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1,
+        "position": [300, 300]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "validation-001",
+                "leftValue": "={{ $json.prompt }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEmpty"
+                }
+              }
+            ],
+            "combinator": "and"
+          }
+        },
+        "id": "validation-001",
+        "name": "Validate Input",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [500, 300]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://0drzjvpz3v4fzy-8000.proxy.runpod.net/v1/chat/completions",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "model",
+                "value": "Qwen/Qwen3-4B-Thinking-2507"
+              },
+              {
+                "name": "messages",
+                "value": "=[{\"role\": \"system\", \"content\": \"You are a helpful AI assistant. Provide direct answers without showing reasoning.\"}, {\"role\": \"user\", \"content\": \"{{ $json.prompt }}\"}]"
+              },
+              {
+                "name": "max_tokens",
+                "value": "={{ $json.max_tokens || 400 }}"
+              },
+              {
+                "name": "temperature",
+                "value": "={{ $json.temperature || 0.3 }}"
+              },
+              {
+                "name": "top_p",
+                "value": 0.95
+              },
+              {
+                "name": "frequency_penalty",
+                "value": 0.3
+              },
+              {
+                "name": "stop",
+                "value": "=[\"Let me think\", \"Hmm,\", \"Okay, the user\", \"*thinking*\"]"
+              }
+            ]
+          },
+          "options": {
+            "timeout": 30000
+          }
+        },
+        "id": "qwen-api-001",
+        "name": "Qwen3 API Call",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4,
+        "position": [700, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Clean Qwen3 response\nconst response = $input.first().json;\nconst rawContent = response.choices[0].message.content;\n\nfunction cleanResponse(text) {\n  // Remove reasoning patterns\n  let cleaned = text.replace(/^(Okay|Hmm|Let me think|The user).*?(?=\\n|\\.|!|\\?)/gim, '');\n  cleaned = cleaned.replace(/I (should|need to|recall).*?(?=\\n|\\.|!|\\?)/gim, '');\n  cleaned = cleaned.replace(/\\*thinking\\*.*?\\*/gim, '');\n  \n  // Extract direct answers\n  if (text.includes('×') || text.includes('*') || text.includes('+')) {\n    const mathResult = text.match(/\\b(\\d+(?:\\.\\d+)?)\\b/);\n    if (mathResult) return mathResult[1];\n  }\n  \n  return cleaned.trim() || text;\n}\n\nreturn [{\n  json: {\n    success: true,\n    response: cleanResponse(rawContent),\n    raw_response: rawContent,\n    metadata: {\n      model: response.model,\n      tokens_used: response.usage.total_tokens,\n      timestamp: new Date().toISOString()\n    }\n  }\n}];"
+        },
+        "id": "processor-001",
+        "name": "Process Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [900, 300]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ $json }}"
+        },
+        "id": "respond-001",
+        "name": "Respond to Webhook",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [1100, 300]
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Validate Input",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validate Input": {
+        "main": [
+          [
+            {
+              "node": "Qwen3 API Call",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Qwen3 API Call": {
+        "main": [
+          [
+            {
+              "node": "Process Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Process Response": {
+        "main": [
+          [
+            {
+              "node": "Respond to Webhook",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "meta": {
+      "templateCredsSetupCompleted": true
+    }
+  }
+]

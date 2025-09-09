@@ -1,0 +1,294 @@
+{
+  "createdAt": "2025-08-10T17:09:42.248Z",
+  "updatedAt": "2025-08-10T17:09:42.248Z",
+  "id": "If4QzMCvRkCj8UcF",
+  "name": "Secure Device Deletion Audit Trail",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "device-deletion-request",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Device Deletion Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "device-deletion-request"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "user-auth-check",
+              "leftValue": "={{ $json.user_email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "verify-user-permissions",
+      "name": "Verify User Permissions",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.atlassian.com/ex/jira/v1/issue",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "={\"project\":{\"key\":\"SEC\"},\"summary\":\"Device Deletion Request for {{ $('Device Deletion Request Webhook').item.json.device_id }}\",\"description\":\"User: {{ $('Device Deletion Request Webhook').item.json.user_email }} requires device deletion. Awaiting approval.\",\"issuetype\":{\"name\":\"Task\"}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-jira-ticket",
+      "name": "Create Approval Jira Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "triggerOn": "specificItem",
+        "itemToCheck": "={{ $('Create Approval Jira Ticket').item.json.key }}",
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "approval-status",
+              "leftValue": "={{ $json.fields.status.name }}",
+              "rightValue": "Approved",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "wait-for-approval",
+      "name": "Wait for Jira Approval",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/YOUR_AUDIT_LOG_SHEET_ID/values/DeviceDeletions:append",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "valueInputOption",
+              "value": "RAW"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "values",
+              "value": "=[[\"{{ $now }}\", \"{{ $('Device Deletion Request Webhook').item.json.user_email }}\", \"{{ $('Device Deletion Request Webhook').item.json.device_id }}\", \"{{ $('Create Approval Jira Ticket').item.json.key }}\", \"Approved, executing deletion\"]]"
+            }
+          ]
+        }
+      },
+      "id": "log-deletion-request",
+      "name": "Log Deletion Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://api.devicemanagement.com/devices/{{ $('Device Deletion Request Webhook').item.json.device_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.device_management_api.token }}"
+            }
+          ]
+        }
+      },
+      "id": "execute-device-deletion",
+      "name": "Execute Device Deletion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://api.atlassian.com/ex/jira/v1/issue/{{ $('Create Approval Jira Ticket').item.json.key }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "={\"status\":{\"name\":\"Completed\"}}"
+            }
+          ]
+        }
+      },
+      "id": "update-jira-completion",
+      "name": "Update Jira Ticket Completion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Device Deletion Request Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify User Permissions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify User Permissions": {
+      "main": [
+        [
+          {
+            "node": "Create Approval Jira Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Approval Jira Ticket": {
+      "main": [
+        [
+          {
+            "node": "Wait for Jira Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Jira Approval": {
+      "main": [
+        [
+          {
+            "node": "Log Deletion Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Deletion Request": {
+      "main": [
+        [
+          {
+            "node": "Execute Device Deletion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Device Deletion": {
+      "main": [
+        [
+          {
+            "node": "Update Jira Ticket Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "1                                   ",
+  "triggerCount": 0,
+  "tags": []
+}

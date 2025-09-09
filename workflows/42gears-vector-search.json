@@ -1,0 +1,215 @@
+[
+  {
+    "name": "42Gears Vector Search Engine",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "path": "/search",
+          "options": {
+            "auth": {
+              "authentication": {
+                "enabled": false
+              }
+            }
+          },
+          "httpMethod": "POST",
+          "responseMode": "responseNode"
+        },
+        "name": "Search Query Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1.1,
+        "position": [200, 300],
+        "id": "webhook-trigger",
+        "webhookId": "42gears-vector-search"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Extract and validate search parameters\nconst body = $input.first().json.body || {};\nconst query = body.query || '';\nconst n_results = body.n_results || 5;\nconst collection_name = body.collection_name || '42gears-kb';\n\nif (!query.trim()) {\n  throw new Error('Search query is required');\n}\n\nif (n_results < 1 || n_results > 20) {\n  throw new Error('n_results must be between 1 and 20');\n}\n\nconsole.log(`Processing search query: \"${query}\" (${n_results} results)`);\n\nreturn [{\n  query: query.trim(),\n  n_results: Math.min(n_results, 20),\n  collection_name: collection_name\n}];"
+        },
+        "name": "Validate Search Input",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [400, 300],
+        "id": "validate-input"
+      },
+      {
+        "parameters": {
+          "url": "http://embedding_service:8002/search",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "query",
+                "value": "={{ $json.query }}"
+              },
+              {
+                "name": "n_results",
+                "value": "={{ $json.n_results }}"
+              },
+              {
+                "name": "collection_name",
+                "value": "={{ $json.collection_name }}"
+              }
+            ]
+          },
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "name": "Vector Similarity Search",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.1,
+        "position": [600, 300],
+        "id": "vector-search"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Process and enrich search results\nconst searchData = $input.first().json;\nconst results = searchData.results || [];\n\n// Sort by similarity score (highest first)\nconst sortedResults = results.sort((a, b) => b.similarity_score - a.similarity_score);\n\n// Enrich results with formatted content\nconst enrichedResults = sortedResults.map((result, index) => {\n  const metadata = result.metadata || {};\n  \n  return {\n    rank: index + 1,\n    similarity_score: Math.round(result.similarity_score * 1000) / 1000, // 3 decimal places\n    article_id: metadata.article_id || 'unknown',\n    article_title: metadata.article_title || 'Untitled',\n    category: metadata.category || 'general',\n    url: metadata.url || '',\n    content_snippet: result.document ? result.document.substring(0, 300) + '...' : '',\n    chunk_index: metadata.chunk_index || 0,\n    total_chunks: metadata.total_chunks || 1,\n    word_count: result.document ? result.document.split(' ').length : 0\n  };\n});\n\n// Prepare final response\nconst response = {\n  query: searchData.query,\n  total_results: enrichedResults.length,\n  search_time: new Date().toISOString(),\n  results: enrichedResults,\n  summary: {\n    top_categories: [...new Set(enrichedResults.map(r => r.category))].slice(0, 3),\n    avg_similarity: enrichedResults.length > 0 \n      ? Math.round((enrichedResults.reduce((sum, r) => sum + r.similarity_score, 0) / enrichedResults.length) * 1000) / 1000\n      : 0,\n    articles_found: [...new Set(enrichedResults.map(r => r.article_id))].length\n  }\n};\n\nconsole.log(`Search completed: ${response.total_results} results, ${response.summary.articles_found} unique articles`);\n\nreturn [response];"
+        },
+        "name": "Process Search Results",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [800, 300],
+        "id": "process-results"
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "options": {
+            "responseHeaders": {
+              "headers": [
+                {
+                  "name": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "name": "Access-Control-Allow-Origin",
+                  "value": "*"
+                }
+              ]
+            }
+          }
+        },
+        "name": "Return Search Results",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [1000, 300],
+        "id": "respond-results"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Handle search errors gracefully\nconst error = $input.first().json.error || 'Search failed';\nconst query = $('Validate Search Input').first().json.query || 'unknown';\n\nconsole.error(`Search error for query \"${query}\": ${error}`);\n\nconst errorResponse = {\n  query: query,\n  total_results: 0,\n  search_time: new Date().toISOString(),\n  results: [],\n  error: {\n    message: error,\n    type: 'search_error'\n  }\n};\n\nreturn [errorResponse];"
+        },
+        "name": "Handle Search Error",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [800, 500],
+        "id": "handle-error"
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json) }}",
+          "responseCode": 500,
+          "options": {
+            "responseHeaders": {
+              "headers": [
+                {
+                  "name": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "name": "Access-Control-Allow-Origin",
+                  "value": "*"
+                }
+              ]
+            }
+          }
+        },
+        "name": "Return Error Response",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [1000, 500],
+        "id": "respond-error"
+      }
+    ],
+    "connections": {
+      "Search Query Webhook": {
+        "main": [
+          [
+            {
+              "node": "Validate Search Input",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validate Search Input": {
+        "main": [
+          [
+            {
+              "node": "Vector Similarity Search",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Vector Similarity Search": {
+        "main": [
+          [
+            {
+              "node": "Process Search Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Process Search Results": {
+        "main": [
+          [
+            {
+              "node": "Return Search Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Handle Search Error": {
+        "main": [
+          [
+            {
+              "node": "Return Error Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null
+  }
+]

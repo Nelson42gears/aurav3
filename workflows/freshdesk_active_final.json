@@ -1,0 +1,240 @@
+[{
+  "createdAt": "2025-08-13T10:39:06.226Z",
+  "updatedAt": "2025-08-13T12:36:00.000Z", 
+  "id": "Vx1G6yEFkMEpyZXH",
+  "name": "Freshdesk: AI First Draft Assistant",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes", 
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "a8b1c2d3-e4f5-6789-0123-456789abcdef",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://42gears.freshdesk.com/api/v2/tickets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "per_page",
+              "value": "10"
+            },
+            {
+              "name": "order_type",
+              "value": "desc" 
+            },
+            {
+              "name": "order_by",
+              "value": "created_at"
+            },
+            {
+              "name": "group_id",
+              "value": "17000117990"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a8b1c2d3-e4f5-6789-0123-456789abcd01",
+      "name": "Get Support_Group Tickets",
+      "type": "n8n-nodes-base.httpRequest", 
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ticket_id",
+              "name": "ticket_id", 
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "ticket_subject",
+              "name": "ticket_subject",
+              "value": "={{ $json.subject }}",
+              "type": "string"
+            },
+            {
+              "id": "ticket_description", 
+              "name": "ticket_description",
+              "value": "={{ $json.description_text || $json.description }}",
+              "type": "string"
+            },
+            {
+              "id": "requester_email",
+              "name": "requester_email",
+              "value": "={{ $json.requester?.email || 'unknown' }}",
+              "type": "string"
+            },
+            {
+              "id": "created_at",
+              "name": "created_at",
+              "value": "={{ $json.created_at }}",
+              "type": "string" 
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b8c1d2e3-f4g5-6789-0123-456789abcdef",
+      "name": "Extract Ticket Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter tickets created in last 5 minutes\nconst now = new Date();\nconst fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);\n\nconst tickets = $input.all();\nconst newTickets = [];\n\n// Process each ticket\nfor (const item of tickets) {\n  const createdAt = new Date(item.json.created_at);\n  \n  if (createdAt > fiveMinutesAgo) {\n    newTickets.push(item);\n  }\n}\n\nif (newTickets.length === 0) {\n  console.log('No new Support_Group tickets found in the last 5 minutes');\n  return [];\n}\n\nconsole.log(`Found ${newTickets.length} new Support_Group tickets`);\nreturn newTickets;"
+      },
+      "id": "b8c1d2e3-f4g5-6789-0123-456789abcd02", 
+      "name": "Filter New Tickets (Last 5 min)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://0drzjvpz3v4fzy-8000.proxy.runpod.net/v1/chat/completions",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"model\": \"Qwen/Qwen3-4B-Thinking-2507\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a senior support specialist for 42Gears. Your tone is helpful, professional, and empathetic. Analyze the user's query and draft a complete response. If possible, reference articles from our public knowledge base at knowledgebase.42gears.com. Do not ask the user for information they have already provided. Keep responses concise and actionable. Sign off as 'Best regards,\\nThe 42Gears Support Team'.\"\n    },\n    {\n      \"role\": \"user\", \n      \"content\": \"Subject: {{ $json.ticket_subject }}\\n\\nCustomer Email: {{ $json.requester_email }}\\n\\nQuery:\\n{{ $json.ticket_description }}\"\n    }\n  ],\n  \"temperature\": 0.3,\n  \"max_tokens\": 1024,\n  \"stop\": [\"\\n\\n---\", \"Human:\", \"Assistant:\"]\n}",
+        "options": {}
+      },
+      "id": "c8d1e2f3-g4h5-6789-0123-456789abcdef",
+      "name": "Qwen3 LLM Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and clean the AI response\nconst response = $input.first();\nconst aiResponse = response.json.choices?.[0]?.message?.content || 'No response generated';\n\n// Clean up any reasoning artifacts\nlet cleanResponse = aiResponse\n  .replace(/^\\s*<\\|thinking\\|>.*?<\\/\\|thinking\\|>\\s*/s, '') // Remove thinking tags\n  .replace(/^\\s*\\*\\*Analysis\\*\\*:.*?(?=\\*\\*Response\\*\\*:|$)/s, '') // Remove analysis section\n  .replace(/^\\s*\\*\\*Response\\*\\*:\\s*/s, '') // Remove response header\n  .trim();\n\n// If still contains artifacts, try to extract clean response\nif (cleanResponse.includes('thinking') || cleanResponse.includes('Analysis')) {\n  const lines = cleanResponse.split('\\n');\n  const cleanLines = lines.filter(line => \n    !line.includes('<|thinking|>') && \n    !line.includes('</|thinking|>') &&\n    !line.toLowerCase().includes('analysis:') &&\n    line.trim().length > 0\n  );\n  cleanResponse = cleanLines.join('\\n').trim();\n}\n\nreturn {\n  json: {\n    ticket_id: $('Extract Ticket Data').item.json.ticket_id,\n    ai_draft: cleanResponse,\n    original_response: aiResponse,\n    ticket_subject: $('Extract Ticket Data').item.json.ticket_subject,\n    requester_email: $('Extract Ticket Data').item.json.requester_email,\n    ticket_description: $('Extract Ticket Data').item.json.ticket_description\n  }\n};"
+      },
+      "id": "d8e1f2g3-h4i5-6789-0123-456789abcdef",
+      "name": "Process AI Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "nelson@42gears.com",
+        "subject": "AI Draft for Freshdesk Ticket #{{ $json.ticket_id }}",
+        "message": "**AI Draft Response for Freshdesk Ticket**\n\n**Ticket Details:**\n- **Ticket ID:** {{ $json.ticket_id }}\n- **Subject:** {{ $json.ticket_subject }}\n- **Customer Email:** {{ $json.requester_email }}\n\n**Customer Query:**\n{{ $json.ticket_description }}\n\n---\n\n**AI-Generated Draft Response:**\n\n{{ $json.ai_draft }}\n\n---\n\n*This is an AI-generated draft response created by Qwen3 LLM. Please review and edit before posting to Freshdesk.*\n\n**Actions:**\n- Review the draft response above\n- Edit/customize as needed\n- Post to Freshdesk ticket #{{ $json.ticket_id }} when ready\n\nBest regards,\nFreshdesk AI Assistant",
+        "options": {}
+      },
+      "id": "e8f1g2h3-i4j5-6789-0123-456789abcdef", 
+      "name": "Email AI Draft to Nelson",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Support_Group Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Support_Group Tickets": {
+      "main": [
+        [
+          {
+            "node": "Extract Ticket Data",
+            "type": "main", 
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Ticket Data": {
+      "main": [
+        [
+          {
+            "node": "Filter New Tickets (Last 5 min)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Tickets (Last 5 min)": {
+      "main": [
+        [
+          {
+            "node": "Qwen3 LLM Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen3 LLM Request": {
+      "main": [
+        [
+          {
+            "node": "Process AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process AI Response": {
+      "main": [
+        [
+          {
+            "node": "Email AI Draft to Nelson",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "versionId": "3"
+}]

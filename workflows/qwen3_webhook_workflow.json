@@ -1,0 +1,133 @@
+{
+  "name": "Qwen3-4B-Webhook-API",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qwen-ai",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-001",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://0drzjvpz3v4fzy-8000.proxy.runpod.net/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "Qwen/Qwen3-4B-Thinking-2507"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\": \"system\", \"content\": \"You are a helpful AI assistant integrated with n8n workflows. Provide direct answers without showing reasoning.\"}, {\"role\": \"user\", \"content\": \"{{ $json.prompt }}\"}]"
+            },
+            {
+              "name": "max_tokens",
+              "value": "={{ $json.max_tokens || 400 }}"
+            },
+            {
+              "name": "temperature",
+              "value": "={{ $json.temperature || 0.3 }}"
+            },
+            {
+              "name": "top_p",
+              "value": 0.95
+            },
+            {
+              "name": "frequency_penalty",
+              "value": 0.3
+            },
+            {
+              "name": "stop",
+              "value": "=[\"Let me think\", \"Hmm,\", \"Okay, the user\", \"*thinking*\"]"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "qwen-api-001",
+      "name": "Qwen3 API Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, response: $node['Process Response'].json.clean_response, metadata: $node['Process Response'].json.metadata } }}"
+      },
+      "id": "respond-001",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        900,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Qwen3 API Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen3 API Call": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    "webhook",
+    "api",
+    "llm",
+    "qwen3"
+  ],
+  "active": true,
+  "triggerCount": 0,
+  "updatedAt": "2025-08-13T08:32:00.000Z",
+  "versionId": "1"
+}

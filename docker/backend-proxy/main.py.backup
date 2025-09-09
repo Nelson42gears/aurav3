@@ -1,0 +1,429 @@
+from fastapi import FastAPI, HTTPException, Request, Depends, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import BaseModel
+import os
+import json
+import uuid
+import logging
+import requests
+import asyncio
+from datetime import datetime
+from typing import Optional, Dict, Any, List, Union
+
+app = FastAPI(title="Aura Backend Proxy", version="1.0.0")
+
+# MCP Session Manager
+class MCPSessionManager:
+    def __init__(self):
+        self.session_id = None
+        self.initialized = False
+        self.lock = asyncio.Lock()
+        
+    async def ensure_session(self) -> str:
+        """Ensure MCP session is initialized and return session ID"""
+        async with self.lock:
+            if not self.initialized or self.session_id is None:
+                await self.initialize_session()
+            return self.session_id
+    
+    async def initialize_session(self):
+        """Initialize MCP session following proper protocol"""
+        try:
+            # Step 1: Send initialize request
+            initialize_request = {
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "clientInfo": {"name": "Aura-Backend-Proxy", "version": "1.0.0"}
+                },
+                "id": "init_1"
+            }
+            
+            logger.info("Initializing MCP session...")
+            response = requests.post(
+                f"{MCP_SERVER_URL}/mcp",
+                json=initialize_request,
+                headers={'Content-Type': 'application/json', 'Accept': 'text/event-stream'},
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            # Step 2: Extract session ID from response headers
+            self.session_id = response.headers.get('Mcp-Session-Id')
+            if not self.session_id:
+                raise Exception("No Mcp-Session-Id header in initialize response")
+            
+            logger.info(f"Received MCP session ID: {self.session_id}")
+            
+            # Step 3: Send initialized notification
+            initialized_notification = {
+                "jsonrpc": "2.0",
+                "method": "initialized",
+                "params": {}
+            }
+            
+            response = requests.post(
+                f"{MCP_SERVER_URL}/mcp",
+                json=initialized_notification,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream',
+                    'Mcp-Session-Id': self.session_id
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            self.initialized = True
+            logger.info("✅ MCP session initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize MCP session: {e}")
+            self.session_id = None
+            self.initialized = False
+            raise
+    
+    def reset_session(self):
+        """Reset session state (called on 404 errors)"""
+        self.session_id = None
+        self.initialized = False
+        logger.info("MCP session reset")
+
+# Global session manager instance
+mcp_session_manager = MCPSessionManager()
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Environment variables
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://mcp-unified-server:9000")
+API_TOKEN = os.getenv("API_TOKEN", "your-secure-token")
+
+# Logging configuration
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class HealthCheck(BaseModel):
+    status: str = "ok"
+
+@app.get("/health", response_model=HealthCheck)
+async def health_check():
+    return HealthCheck()
+
+class HealthCheckDetailed(BaseModel):
+    status: str
+    timestamp: str
+    server: str
+    version: str
+    checks: Dict[str, Any]
+
+@app.get("/health/detailed", response_model=HealthCheckDetailed)
+async def detailed_health_check():
+    """Detailed health check that verifies MCP server and services"""
+    health_data = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "server": "Aura Backend Proxy",
+        "version": "1.0.0",
+        "checks": {
+            "mcp_server": {
+                "status": "pending",
+                "endpoint": f"{MCP_SERVER_URL}/mcp",
+                "error": None,
+                "response_time_ms": None
+            },
+            "database": {
+                "status": "pending",
+                "connected": False,
+                "error": None,
+                "response_time_ms": None
+            },
+            "storage": {
+                "status": "pending",
+                "writable": False,
+                "error": None,
+                "response_time_ms": None
+            }
+        }
+    }
+    
+    # Test MCP server connectivity
+    start_time = datetime.now()
+    try:
+        mcp_response = requests.post(
+            f"{MCP_SERVER_URL}/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "health_check",
+                "params": {},
+                "id": "health_check_1"
+            },
+            timeout=5
+        )
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+        health_data["checks"]["mcp_server"]["response_time_ms"] = round(response_time, 2)
+        
+        if mcp_response.status_code == 200:
+            result = mcp_response.json()
+            health_data["checks"]["mcp_server"]["status"] = "healthy"
+            health_data["checks"]["mcp_server"]["details"] = result.get("result", {})
+            
+            # Check if any adapters are unhealthy
+            if isinstance(health_data["checks"]["mcp_server"]["details"].get("adapters"), dict):
+                for adapter, status in health_data["checks"]["mcp_server"]["details"]["adapters"].items():
+                    if status.get("status") != "healthy":
+                        health_data["status"] = "degraded"
+                        break
+        else:
+            health_data["checks"]["mcp_server"]["status"] = "unhealthy"
+            health_data["checks"]["mcp_server"]["error"] = f"HTTP {mcp_response.status_code}"
+            health_data["status"] = "degraded"
+            
+    except Exception as e:
+        health_data["checks"]["mcp_server"]["status"] = "error"
+        health_data["checks"]["mcp_server"]["error"] = str(e)
+        health_data["status"] = "degraded"
+    
+    # Test database connectivity (if configured)
+    if os.getenv("DATABASE_URL"):
+        start_time = datetime.now()
+        try:
+            # Add database connection test here if needed
+            health_data["checks"]["database"]["status"] = "healthy"
+            health_data["checks"]["database"]["connected"] = True
+            health_data["checks"]["database"]["response_time_ms"] = round((datetime.now() - start_time).total_seconds() * 1000, 2)
+        except Exception as e:
+            health_data["checks"]["database"]["status"] = "error"
+            health_data["checks"]["database"]["error"] = str(e)
+            health_data["status"] = "degraded"
+    else:
+        health_data["checks"]["database"]["status"] = "disabled"
+    
+    # Test storage (check if we can write to disk)
+    start_time = datetime.now()
+    try:
+        test_file = "/tmp/health_check_test.txt"
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        health_data["checks"]["storage"]["status"] = "healthy"
+        health_data["checks"]["storage"]["writable"] = True
+        health_data["checks"]["storage"]["response_time_ms"] = round((datetime.now() - start_time).total_seconds() * 1000, 2)
+    except Exception as e:
+        health_data["checks"]["storage"]["status"] = "error"
+        health_data["checks"]["storage"]["error"] = str(e)
+        health_data["status"] = "degraded"
+    
+    return health_data
+
+async def handle_mcp_request(path: str, request: Request, method: str = 'GET') -> Dict[str, Any]:
+    logger.info(f"Handling {method} request for path: {path}")
+    """Handle MCP protocol request with proper formatting"""
+    # Extract method name and platform from path
+    parts = [p for p in path.split('/') if p]
+    if len(parts) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid path format. Expected format: /api/{platform}/{method}"
+        )
+    
+    # Remove 'api' prefix if present
+    if parts[0] == 'api':
+        parts = parts[1:]
+    
+    if len(parts) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid path format. Expected format: /api/{platform}/{method}"
+        )
+    
+    # Extract method name - NO platform prefixes needed
+    # MCP tools are registered as: health_check, unified_search, etc.
+    # NOT as: mcp.health_check or platform.method
+    method_name = parts[-1].replace('-', '_')
+    logger.info(f"Calling MCP method: {method_name}")
+    
+    # Get request parameters
+    params = {}
+    if method == 'GET':
+        params = dict(request.query_params)
+        logger.info(f"Query params: {params}")
+    elif method == 'POST':
+        try:
+            request_body = await request.json()
+            # Extract only the actual parameters, not the entire JSON-RPC wrapper
+            if isinstance(request_body, dict):
+                # If it's already a JSON-RPC request, extract params
+                if 'params' in request_body and 'jsonrpc' in request_body:
+                    params = request_body['params']
+                else:
+                    # Otherwise use the entire body as params
+                    params = request_body
+            else:
+                params = {}
+            logger.info(f"Extracted params: {params}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse POST data: {e}")
+            params = {}
+    
+    # Ensure MCP session is initialized
+    try:
+        mcp_session_id = await mcp_session_manager.ensure_session()
+    except Exception as e:
+        logger.error(f"Failed to initialize MCP session: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"MCP session initialization failed: {str(e)}"
+        )
+    
+    # Generate request ID
+    request_id = str(uuid.uuid4())
+    
+    # Prepare CLEAN MCP protocol request - NO double wrapping
+    mcp_request = {
+        "jsonrpc": "2.0",
+        "method": method_name,
+        "params": params,
+        "id": request_id
+    }
+    logger.info(f"MCP request: {json.dumps(mcp_request)}")
+    
+    try:
+        # Forward request to MCP server
+        try:
+            logger.info(f"Sending request to MCP server: {MCP_SERVER_URL}/mcp")
+            
+            # Use StreamableHTTP transport with proper headers including session ID
+            response = requests.post(
+                f"{MCP_SERVER_URL}/mcp",
+                json=mcp_request,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream',
+                    'User-Agent': 'Aura-Backend-Proxy/1.0.0',
+                    'Mcp-Session-Id': mcp_session_id
+                },
+                timeout=30,
+                verify=False
+            )
+            
+            # Handle HTTP errors
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                status_code = e.response.status_code
+                error_msg = str(e)
+                
+                # Handle session expiration (404 Not Found)
+                if status_code == 404:
+                    logger.warning("MCP session expired (404), resetting session")
+                    mcp_session_manager.reset_session()
+                    raise HTTPException(
+                        status_code=500,
+                        detail="MCP session expired, please retry request"
+                    )
+                
+                try:
+                    error_detail = e.response.json()
+                    error_msg = error_detail.get('error', {}).get('message', error_msg)
+                except:
+                    pass
+                
+                logger.error(f"MCP server HTTP error {status_code}: {error_msg}")
+                raise HTTPException(
+                    status_code=status_code,
+                    detail=f"MCP server error: {error_msg}"
+                )
+                
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"MCP server connection error: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail="MCP server is unavailable"
+            )
+            
+        except requests.exceptions.Timeout as e:
+            logger.error(f"MCP server timeout: {e}")
+            raise HTTPException(
+                status_code=504,
+                detail="MCP server request timed out"
+            )
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"MCP server request error: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error forwarding request to MCP server: {str(e)}"
+            )
+        response.raise_for_status()
+        
+        # Process MCP JSON-RPC response
+        try:
+            # Parse the JSON response from MCP server
+            mcp_response_data = response.json()
+            logger.info(f"MCP server response: {mcp_response_data}")
+            
+            # Return the result directly as JSON
+            if 'result' in mcp_response_data:
+                return JSONResponse(content=mcp_response_data['result'])
+            elif 'error' in mcp_response_data:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"MCP server error: {mcp_response_data['error']['message']}"
+                )
+            else:
+                return JSONResponse(content=mcp_response_data)
+        except Exception as e:
+            logger.error(f"Unexpected error processing MCP response: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Unexpected error processing MCP response: {str(e)}"
+            )
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error forwarding request to MCP server: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error forwarding request to MCP server: {str(e)}"
+        )
+
+@app.get("/api/{path:path}", response_model=Dict[str, Any])
+async def proxy_get_request(path: str, request: Request):
+    """Proxy GET requests to the MCP Unified Server"""
+    # Verify API token
+    auth_token = request.headers.get("Authorization")
+    if not auth_token or auth_token != f"Bearer {API_TOKEN}":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API token"
+        )
+    return await handle_mcp_request(path, request, 'GET')
+
+@app.post("/api/{path:path}", response_model=Dict[str, Any])
+async def proxy_post_request(path: str, request: Request):
+    # Verify API token
+    auth_token = request.headers.get("Authorization")
+    if not auth_token or auth_token != f"Bearer {API_TOKEN}":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API token"
+        )
+    return await handle_mcp_request(path, request, 'POST')
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=9100,
+        reload=True,
+        log_level="info"
+    )

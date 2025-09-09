@@ -1,0 +1,183 @@
+[
+  {
+    "name": "Freshdesk Direct API Monitor",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 5
+              }
+            ]
+          }
+        },
+        "id": "schedule-trigger",
+        "name": "Every 5 minutes",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.2,
+        "position": [200, 300]
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "https://42gears.freshdesk.com/api/v2/tickets",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              {
+                "name": "per_page",
+                "value": "10"
+              },
+              {
+                "name": "order_type",
+                "value": "desc"
+              },
+              {
+                "name": "order_by",
+                "value": "created_at"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "freshdesk-api",
+        "name": "Freshdesk API Call",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [420, 300],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "freshdesk-api-creds",
+            "name": "Freshdesk API"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "// Filter tickets created in last 5 minutes\nconst now = new Date();\nconst fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);\n\nconst tickets = $input.all();\nconst newTickets = [];\n\n// Process each ticket\nfor (const item of tickets) {\n  const ticketsData = Array.isArray(item.json) ? item.json : [item.json];\n  \n  for (const ticket of ticketsData) {\n    const createdAt = new Date(ticket.created_at);\n    \n    if (createdAt > fiveMinutesAgo) {\n      newTickets.push({\n        json: {\n          ticket_id: ticket.id,\n          subject: ticket.subject,\n          description: ticket.description_text || ticket.description,\n          requester_email: ticket.requester?.email || 'unknown@example.com',\n          status: ticket.status,\n          priority: ticket.priority,\n          created_at: ticket.created_at\n        }\n      });\n    }\n  }\n}\n\nif (newTickets.length === 0) {\n  // No new tickets, stop workflow\n  return [];\n}\n\nconsole.log(`Found ${newTickets.length} new tickets`);\nreturn newTickets;"
+        },
+        "id": "filter-new-tickets",
+        "name": "Filter New Tickets",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [640, 300]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://0drzjvpz3v4fzy-8000.proxy.runpod.net/v1/chat/completions",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyContentType": "json",
+          "jsonBody": "{\n  \"model\": \"qwen\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a professional support agent. Write a helpful, concise response draft for this customer inquiry. Keep it under 200 words and be friendly but professional.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Subject: {{ $json.subject }}\\n\\nCustomer Query: {{ $json.description }}\"\n    }\n  ],\n  \"temperature\": 0.3,\n  \"max_tokens\": 300,\n  \"stop\": [\"\\n\\nThinking:\", \"<thinking>\", \"</thinking>\"]\n}",
+          "options": {}
+        },
+        "id": "qwen-ai-response",
+        "name": "Generate AI Response",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [860, 300]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://42gears.freshdesk.com/api/v2/tickets/{{ $('Filter New Tickets').item.json.ticket_id }}/notes",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpBasicAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyContentType": "json",
+          "jsonBody": "{\n  \"body\": \"🤖 **AI Draft Response:**\\n\\n{{ $('Generate AI Response').item.json.choices[0].message.content }}\\n\\n---\\n*This is an AI-generated draft. Please review and edit before sending to the customer.*\",\n  \"private\": true\n}",
+          "options": {}
+        },
+        "id": "post-ai-note",
+        "name": "Post AI Note to Freshdesk",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1080, 300],
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "freshdesk-api-creds",
+            "name": "Freshdesk API"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Every 5 minutes": {
+        "main": [
+          [
+            {
+              "node": "Freshdesk API Call",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Freshdesk API Call": {
+        "main": [
+          [
+            {
+              "node": "Filter New Tickets",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Filter New Tickets": {
+        "main": [
+          [
+            {
+              "node": "Generate AI Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate AI Response": {
+        "main": [
+          [
+            {
+              "node": "Post AI Note to Freshdesk",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "tags": [],
+    "triggerCount": 1,
+    "updatedAt": "2025-08-13T11:31:15.000Z",
+    "versionId": "1"
+  }
+]

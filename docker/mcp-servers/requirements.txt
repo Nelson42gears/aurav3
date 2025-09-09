@@ -1,0 +1,9 @@
+fastmcp==2.10.6
+fastapi
+uvicorn
+python-dotenv
+psycopg2-binary
+redis
+httpx
+pydantic
+aiohttp

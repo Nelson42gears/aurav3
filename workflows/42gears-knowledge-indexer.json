@@ -1,0 +1,270 @@
+[
+  {
+    "name": "42Gears Knowledge Base Indexer",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "0 2 * * 0"
+              }
+            ]
+          }
+        },
+        "name": "Weekly Knowledge Base Sync",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.1,
+        "position": [200, 300],
+        "id": "schedule-trigger"
+      },
+      {
+        "parameters": {
+          "url": "https://knowledgebase.42gears.com/article-categories/",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "text"
+              }
+            }
+          }
+        },
+        "name": "Fetch Categories Page",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.1,
+        "position": [400, 300],
+        "id": "fetch-categories"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Extract category URLs from HTML\nconst html = $input.first().json.data;\nconst categoryRegex = /href=\"\\/article-categories\\/([^\"]+)\\//g;\nconst categories = [];\nlet match;\n\nwhile ((match = categoryRegex.exec(html)) !== null) {\n  const categorySlug = match[1];\n  if (categorySlug && !categories.includes(categorySlug)) {\n    categories.push({\n      category: categorySlug,\n      url: `https://knowledgebase.42gears.com/article-categories/${categorySlug}/`\n    });\n  }\n}\n\nconsole.log(`Found ${categories.length} categories`);\nreturn categories;"
+        },
+        "name": "Extract Categories",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [600, 300],
+        "id": "extract-categories"
+      },
+      {
+        "parameters": {
+          "url": "={{ $json.url }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "text"
+              }
+            }
+          }
+        },
+        "name": "Fetch Category Articles",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.1,
+        "position": [800, 300],
+        "id": "fetch-articles"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Extract article URLs from category page\nconst html = $input.first().json.data;\nconst category = $input.first().json.category;\nconst articleRegex = /href=\"\\/article\\/([^\"]+)\\//g;\nconst articles = [];\nlet match;\n\nwhile ((match = articleRegex.exec(html)) !== null) {\n  const articleSlug = match[1];\n  if (articleSlug) {\n    articles.push({\n      category: category,\n      article_slug: articleSlug,\n      url: `https://knowledgebase.42gears.com/article/${articleSlug}/`,\n      id: articleSlug\n    });\n  }\n}\n\nconsole.log(`Found ${articles.length} articles in category ${category}`);\nreturn articles;"
+        },
+        "name": "Extract Article URLs",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [1000, 300],
+        "id": "extract-article-urls"
+      },
+      {
+        "parameters": {
+          "url": "={{ $json.url }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "text"
+              }
+            }
+          }
+        },
+        "name": "Fetch Article Content",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.1,
+        "position": [1200, 300],
+        "id": "fetch-content"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Extract article content and metadata\nconst html = $input.first().json.data;\nconst article = $input.first().json;\n\n// Extract title\nconst titleMatch = html.match(/<h1[^>]*>([^<]+)<\\/h1>/);\nconst title = titleMatch ? titleMatch[1].trim() : article.article_slug;\n\n// Extract main content - look for article body\nconst contentMatch = html.match(/<div[^>]*class=\"[^\"]*article[^\"]*\"[^>]*>([\\s\\S]*?)<\\/div>/i) || \n                    html.match(/<main[^>]*>([\\s\\S]*?)<\\/main>/i) ||\n                    html.match(/<article[^>]*>([\\s\\S]*?)<\\/article>/i);\n\nlet content = contentMatch ? contentMatch[1] : html;\n\n// Clean HTML tags and normalize whitespace\ncontent = content\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .replace(/&nbsp;/g, ' ')\n  .replace(/&amp;/g, '&')\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"')\n  .trim();\n\n// Return structured article data\nreturn [{\n  id: article.id,\n  title: title,\n  content: content,\n  category: article.category,\n  url: article.url,\n  metadata: {\n    word_count: content.split(' ').length,\n    extracted_at: new Date().toISOString()\n  }\n}];"
+        },
+        "name": "Parse Article Content",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [1400, 300],
+        "id": "parse-content"
+      },
+      {
+        "parameters": {
+          "url": "http://embedding_service:8002/store_article",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyParameters": {
+            "parameters": [
+              {
+                "name": "id",
+                "value": "={{ $json.id }}"
+              },
+              {
+                "name": "title", 
+                "value": "={{ $json.title }}"
+              },
+              {
+                "name": "content",
+                "value": "={{ $json.content }}"
+              },
+              {
+                "name": "category",
+                "value": "={{ $json.category }}"
+              },
+              {
+                "name": "url",
+                "value": "={{ $json.url }}"
+              },
+              {
+                "name": "metadata",
+                "value": "={{ $json.metadata }}"
+              }
+            ]
+          },
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true,
+                "responseFormat": "json"
+              }
+            }
+          }
+        },
+        "name": "Store in Vector DB",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.1,
+        "position": [1600, 300],
+        "id": "store-vectors"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Summarize indexing results\nconst results = $input.all();\nconst successful = results.filter(r => r.json.status === 'success').length;\nconst failed = results.filter(r => r.json.status !== 'success').length;\nconst totalChunks = results.reduce((sum, r) => sum + (r.json.chunks_stored || 0), 0);\n\nconsole.log(`Indexing complete: ${successful} articles successful, ${failed} failed, ${totalChunks} chunks stored`);\n\nreturn [{\n  indexing_summary: {\n    successful_articles: successful,\n    failed_articles: failed,\n    total_chunks: totalChunks,\n    completed_at: new Date().toISOString()\n  }\n}];"
+        },
+        "name": "Summarize Results",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [1800, 300],
+        "id": "summarize-results"
+      }
+    ],
+    "connections": {
+      "Weekly Knowledge Base Sync": {
+        "main": [
+          [
+            {
+              "node": "Fetch Categories Page",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Categories Page": {
+        "main": [
+          [
+            {
+              "node": "Extract Categories",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extract Categories": {
+        "main": [
+          [
+            {
+              "node": "Fetch Category Articles",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Category Articles": {
+        "main": [
+          [
+            {
+              "node": "Extract Article URLs",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extract Article URLs": {
+        "main": [
+          [
+            {
+              "node": "Fetch Article Content",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Article Content": {
+        "main": [
+          [
+            {
+              "node": "Parse Article Content",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Article Content": {
+        "main": [
+          [
+            {
+              "node": "Store in Vector DB",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Store in Vector DB": {
+        "main": [
+          [
+            {
+              "node": "Summarize Results",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null
+  }
+]

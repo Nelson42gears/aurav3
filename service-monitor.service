@@ -1,0 +1,18 @@
+[Unit]
+Description=Aura Service Monitor
+Documentation=https://github.com/Nelson42gears/aura
+After=network.target
+
+[Service]
+Type=simple
+User=nelson
+Group=nelson
+WorkingDirectory=/home/nelson/nebula/Aura
+ExecStart=/home/nelson/nebula/Aura/.venv/bin/python /home/nelson/nebula/Aura/scripts/service_monitor.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

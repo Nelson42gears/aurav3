@@ -1,0 +1,276 @@
+[
+  {
+    "name": "Customer Data Chat - Fixed",
+    "active": true,
+    "nodes": [
+      {
+        "parameters": {
+          "path": "customer-chat",
+          "httpMethod": "POST",
+          "options": {}
+        },
+        "id": "webhook-trigger",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1.2,
+        "position": [240, 300],
+        "notes": " Standard webhook: POST /webhook/customer-chat\nAccepts: { \"chatInput\": \"Get data for customer john@example.com\", \"enabled_servers\": [\"freshdesk\", \"intercom\"] }"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "x-goog-api-key",
+                "value": "={{ $env.GEMINI_API_KEY }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "{\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"Analyze this query and return JSON only:\\n\\nQuery: {{ $json.chatInput }}\\n\\nReturn:\\n{\\n  \\\"action\\\": \\\"freshdesk|intercom|general\\\",\\n  \\\"customer_id\\\": \\\"email/name if found\\\",\\n  \\\"intent\\\": \\\"data|sentiment|report\\\"\\n}\"\n    }]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.1,\n    \"maxOutputTokens\": 150\n  }\n}",
+          "options": {}
+        },
+        "id": "gemini-analyzer",
+        "name": "Gemini Query Analyzer",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [460, 300],
+        "notes": " Standard HTTP Request to Gemini API"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Parse Gemini response\nconst geminiText = $json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\nconst jsonMatch = geminiText.match(/\\{[\\s\\S]*\\}/);\n\nlet analysis = {};\ntry {\n  analysis = jsonMatch ? JSON.parse(jsonMatch[0]) : {};\n} catch (e) {\n  analysis = { action: 'general', customer_id: '', intent: 'data' };\n}\n\nreturn [{\n  original_query: $json.chatInput,\n  action: analysis.action || 'general',\n  customer_id: analysis.customer_id || '',\n  intent: analysis.intent || 'data'\n}];"
+        },
+        "id": "parse-intent",
+        "name": "Parse Intent",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [680, 300],
+        "notes": " Standard Code node"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $('Parse Intent').item.json.action }}",
+                "rightValue": "freshdesk",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "freshdesk-route",
+        "name": "Route Freshdesk?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [900, 200],
+        "notes": " Standard IF node"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $('Parse Intent').item.json.action }}",
+                "rightValue": "intercom",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "intercom-route",
+        "name": "Route Intercom?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [900, 400],
+        "notes": " Standard IF node"
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "http://freshdesk_mcp_server:8000/api/tickets/search",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "{{ JSON.stringify({query: $('Parse Intent').item.json.customer_id || $('Parse Intent').item.json.original_query}) }}",
+          "options": {"allowUnauthorizedCerts": true}
+        },
+        "id": "freshdesk-mcp",
+        "name": "Freshdesk MCP Query",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1120, 120],
+        "notes": " Standard HTTP Request to Freshdesk MCP"
+      },
+      {
+        "parameters": {
+          "method": "GET",
+          "url": "http://intercom_mcp_server:9000/api/contacts/search",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "{{ JSON.stringify({query: $('Parse Intent').item.json.customer_id || $('Parse Intent').item.json.original_query}) }}",
+          "options": {"allowUnauthorizedCerts": true}
+        },
+        "id": "intercom-mcp",
+        "name": "Intercom MCP Query",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1120, 480],
+        "notes": " Standard HTTP Request to Intercom MCP"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Format response\nconst query = $json.chatInput;\nconst action = $('Parse Intent').item.json.action;\nconst customerId = $('Parse Intent').item.json.customer_id;\n\nlet result = {\n  query: query,\n  action: action,\n  customer_id: customerId,\n  timestamp: new Date().toISOString(),\n  status: 'processed',\n  response: 'Processing your query...'\n};\n\n// Add data from MCP calls if available\nif ($('Freshdesk MCP Query').item) {\n  result.freshdesk_data = $('Freshdesk MCP Query').item.json;\n  result.response = 'Found Freshdesk data for your query';\n}\n\nif ($('Intercom MCP Query').item) {\n  result.intercom_data = $('Intercom MCP Query').item.json;\n  result.response = 'Found Intercom data for your query';\n}\n\nreturn {\n  json: result\n};"
+        },
+        "id": "format-response",
+        "name": "Format Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [1340, 300],
+        "notes": " Standard Code node"
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseData": "={{ $json }}"
+        },
+        "id": "webhook-response",
+        "name": "Webhook Response",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [1560, 300],
+        "notes": "📤 Standard Respond to Webhook node"
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Gemini Query Analyzer",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Gemini Query Analyzer": {
+        "main": [
+          [
+            {
+              "node": "Parse Intent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Intent": {
+        "main": [
+          [
+            {
+              "node": "Route Freshdesk?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Route Intercom?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Route Freshdesk?": {
+        "main": [
+          [
+            {
+              "node": "Freshdesk MCP Query",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Route Intercom?": {
+        "main": [
+          [
+            {
+              "node": "Intercom MCP Query",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Freshdesk MCP Query": {
+        "main": [
+          [
+            {
+              "node": "Format Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Intercom MCP Query": {
+        "main": [
+          [
+            {
+              "node": "Format Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Response": {
+        "main": [
+          [
+            {
+              "node": "Webhook Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "tags": []
+  }
+]

@@ -1,0 +1,148 @@
+{
+  "name": "Qwen3 4B LLM Basic Integration",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b5c09b68-7cb5-4b0c-9c1a-2e3f8d7a6c90",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [320, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "user_prompt",
+              "value": "What is artificial intelligence?"
+            },
+            {
+              "name": "temperature", 
+              "value": "0.3"
+            },
+            {
+              "name": "max_tokens",
+              "value": "400"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+      "name": "Set LLM Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://0drzjvpz3v4fzy-8000.proxy.runpod.net/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "Qwen/Qwen3-4B-Thinking-2507"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\n  \"role\": \"system\",\n  \"content\": \"You are a helpful AI assistant. Provide direct, accurate answers without showing your reasoning process.\"\n},\n{\n  \"role\": \"user\", \n  \"content\": \"{{ $node['Set LLM Parameters'].json.user_prompt }}\"\n}]"
+            },
+            {
+              "name": "max_tokens",
+              "value": "={{ parseInt($node['Set LLM Parameters'].json.max_tokens) }}"
+            },
+            {
+              "name": "temperature", 
+              "value": "={{ parseFloat($node['Set LLM Parameters'].json.temperature) }}"
+            },
+            {
+              "name": "top_p",
+              "value": 0.95
+            },
+            {
+              "name": "frequency_penalty",
+              "value": 0.3
+            },
+            {
+              "name": "stop",
+              "value": "=[\"Let me think\", \"Hmm,\", \"Okay, the user\", \"*thinking*\"]"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "f1e2d3c4-b5a6-9870-5432-109876fedcba", 
+      "name": "Call Qwen3 LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and clean the LLM response\nconst response = $input.first().json;\nconst rawContent = response.choices[0].message.content;\n\n// Simple response filtering\nfunction cleanResponse(text) {\n  // Remove common reasoning patterns\n  let cleaned = text.replace(/^(Okay|Hmm|Let me think|The user).*?(?=\\n|\\.|!|\\?)/gi, '');\n  cleaned = cleaned.replace(/I (should|need to|recall|remember).*?(?=\\n|\\.|!|\\?)/gi, '');\n  cleaned = cleaned.replace(/\\*thinking\\*.*?\\*/gi, '');\n  \n  // Clean up whitespace\n  cleaned = cleaned.replace(/\\n\\s*\\n/g, '\\n').trim();\n  \n  return cleaned || text; // Fallback to original if cleaning removes everything\n}\n\nconst cleanedContent = cleanResponse(rawContent);\n\nreturn [{\n  json: {\n    raw_response: rawContent,\n    clean_response: cleanedContent,\n    tokens_used: response.usage.total_tokens,\n    model: response.model,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "c4d5e6f7-8901-2345-6789-0abcdef12345",
+      "name": "Process LLM Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set LLM Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set LLM Parameters": {
+      "main": [
+        [
+          {
+            "node": "Call Qwen3 LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Qwen3 LLM": {
+      "main": [
+        [
+          {
+            "node": "Process LLM Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["llm", "qwen3", "ai"],
+  "triggerCount": 0,
+  "updatedAt": "2025-08-13T08:22:51.000Z",
+  "versionId": "1"
+}

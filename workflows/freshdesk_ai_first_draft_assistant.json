@@ -1,0 +1,201 @@
+[
+  {
+    "name": "Freshdesk: AI First Draft Assistant",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "freshdesk-webhook",
+          "options": {}
+        },
+        "id": "a8b1c2d3-e4f5-6789-0123-456789abcdef",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [240, 300],
+        "webhookId": "freshdesk-new-ticket"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "ticket_id",
+                "name": "ticket_id",
+                "value": "={{ $json.ticket?.id || $json.id }}",
+                "type": "string"
+              },
+              {
+                "id": "ticket_subject",
+                "name": "ticket_subject", 
+                "value": "={{ $json.ticket?.subject || $json.subject }}",
+                "type": "string"
+              },
+              {
+                "id": "ticket_description",
+                "name": "ticket_description",
+                "value": "={{ $json.ticket?.description_text || $json.description_text || $json.description }}",
+                "type": "string"
+              },
+              {
+                "id": "requester_email",
+                "name": "requester_email",
+                "value": "={{ $json.ticket?.requester?.email || $json.requester?.email || 'unknown' }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "b8c1d2e3-f4g5-6789-0123-456789abcdef",
+        "name": "Extract Ticket Data",
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [460, 300]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://0drzjvpz3v4fzy-8000.proxy.runpod.net/v1/chat/completions",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "Bearer dummy-key"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyContentType": "json",
+          "jsonBody": "{\n  \"model\": \"qwen\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a senior support specialist for 42Gears. Your tone is helpful, professional, and empathetic. Analyze the user's query and draft a complete response. If possible, reference articles from our public knowledge base at knowledgebase.42gears.com. Do not ask the user for information they have already provided. Keep responses concise and actionable. Sign off as 'Best regards,\\nThe 42Gears Support Team'.\"\n    },\n    {\n      \"role\": \"user\", \n      \"content\": \"Subject: {{ $('Extract Ticket Data').item.json.ticket_subject }}\\n\\nCustomer Email: {{ $('Extract Ticket Data').item.json.requester_email }}\\n\\nQuery:\\n{{ $('Extract Ticket Data').item.json.ticket_description }}\"\n    }\n  ],\n  \"temperature\": 0.3,\n  \"max_tokens\": 1024,\n  \"stop\": [\"\\n\\n---\", \"Human:\", \"Assistant:\"]\n}",
+          "options": {}
+        },
+        "id": "c8d1e2f3-g4h5-6789-0123-456789abcdef",
+        "name": "Qwen3 LLM Request",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [680, 300]
+      },
+      {
+        "parameters": {
+          "jsCode": "// Extract and clean the AI response\nconst response = $input.first();\nconst aiResponse = response.json.choices?.[0]?.message?.content || 'No response generated';\n\n// Clean up any reasoning artifacts\nlet cleanResponse = aiResponse\n  .replace(/^\\s*<\\|thinking\\|>.*?<\\/\\|thinking\\|>\\s*/s, '') // Remove thinking tags\n  .replace(/^\\s*\\*\\*Analysis\\*\\*:.*?(?=\\*\\*Response\\*\\*:|$)/s, '') // Remove analysis section\n  .replace(/^\\s*\\*\\*Response\\*\\*:\\s*/s, '') // Remove response header\n  .trim();\n\n// If still contains artifacts, try to extract clean response\nif (cleanResponse.includes('thinking') || cleanResponse.includes('Analysis')) {\n  const lines = cleanResponse.split('\\n');\n  const cleanLines = lines.filter(line => \n    !line.includes('<|thinking|>') && \n    !line.includes('</|thinking|>') &&\n    !line.toLowerCase().includes('analysis:') &&\n    line.trim().length > 0\n  );\n  cleanResponse = cleanLines.join('\\n').trim();\n}\n\n// Format for Freshdesk\nconst formattedResponse = `🤖 **AI-Generated Draft Response**\n\n---\n\n${cleanResponse}\n\n---\n\n*This is an AI-generated draft. Please review and customize before sending to the customer.*`;\n\nreturn {\n  json: {\n    ticket_id: $('Extract Ticket Data').item.json.ticket_id,\n    ai_draft: formattedResponse,\n    original_response: aiResponse,\n    ticket_subject: $('Extract Ticket Data').item.json.ticket_subject\n  }\n};"
+        },
+        "id": "d8e1f2g3-h4i5-6789-0123-456789abcdef",
+        "name": "Process AI Response",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 1,
+        "position": [900, 300]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://localhost:8000/api/freshdesk/tickets/{{ $('Process AI Response').item.json.ticket_id }}/notes",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "bodyContentType": "json",
+          "jsonBody": "{\n  \"body\": \"{{ $('Process AI Response').item.json.ai_draft }}\",\n  \"private\": true,\n  \"source\": 3\n}",
+          "options": {}
+        },
+        "id": "e8f1g2h3-i4j5-6789-0123-456789abcdef",
+        "name": "Post to Freshdesk (MCP)",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1120, 300]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "{\n  \"status\": \"success\",\n  \"message\": \"AI draft generated and posted to ticket\",\n  \"ticket_id\": \"{{ $('Process AI Response').item.json.ticket_id }}\",\n  \"subject\": \"{{ $('Process AI Response').item.json.ticket_subject }}\"\n}",
+          "options": {}
+        },
+        "id": "f8g1h2i3-j4k5-6789-0123-456789abcdef",
+        "name": "Webhook Response",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [1340, 300]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Extract Ticket Data",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Extract Ticket Data": {
+        "main": [
+          [
+            {
+              "node": "Qwen3 LLM Request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Qwen3 LLM Request": {
+        "main": [
+          [
+            {
+              "node": "Process AI Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Process AI Response": {
+        "main": [
+          [
+            {
+              "node": "Post to Freshdesk (MCP)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Post to Freshdesk (MCP)": {
+        "main": [
+          [
+            {
+              "node": "Webhook Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "tags": [],
+    "triggerCount": 1,
+    "updatedAt": "2025-08-13T10:36:43.000Z",
+    "versionId": "1"
+  }
+]

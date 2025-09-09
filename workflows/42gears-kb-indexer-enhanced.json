@@ -1,0 +1,415 @@
+[{
+  "createdAt": "2025-08-17T17:20:00.000Z",
+  "updatedAt": "2025-08-17T17:20:00.000Z", 
+  "id": "sfHmP1kbGDPFrXXk",
+  "name": "42Gears Knowledge Base Indexer",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Daily Knowledge Base Sync",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 300],
+      "id": "schedule-trigger",
+      "notes": "🕐 Daily extraction at 2 AM with enhanced deduplication"
+    },
+    {
+      "parameters": {
+        "url": "https://knowledgebase.42gears.com/article-categories/",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "name": "Fetch Categories Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [400, 300],
+      "id": "fetch-categories",
+      "notes": "📂 Get all product categories from 42gears knowledge base"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract category URLs from HTML with better error handling\nconst html = $input.first().json.data;\nif (!html) {\n  console.error('No HTML data received');\n  return [];\n}\n\nconst categoryRegex = /href=\"\\/article-categories\\/([^\"]+)\\//g;\nconst categories = [];\nlet match;\n\nwhile ((match = categoryRegex.exec(html)) !== null) {\n  const categorySlug = match[1];\n  if (categorySlug && !categories.some(c => c.category === categorySlug)) {\n    categories.push({\n      category: categorySlug,\n      url: `https://knowledgebase.42gears.com/article-categories/${categorySlug}/`,\n      processed_at: new Date().toISOString()\n    });\n  }\n}\n\nconsole.log(`✅ Found ${categories.length} categories:`, categories.map(c => c.category));\nreturn categories;"
+      },
+      "name": "Extract Categories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 300],
+      "id": "extract-categories",
+      "notes": "🔍 Parse HTML to extract all product category URLs"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "name": "Fetch Category Articles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [800, 300],
+      "id": "fetch-articles",
+      "notes": "📄 Fetch all article pages for each category"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract article URLs with deduplication tracking\nconst html = $input.first().json.data;\nconst category = $input.first().json.category;\n\nif (!html || !category) {\n  console.error(`Missing data for category: ${category}`);\n  return [];\n}\n\nconst articleRegex = /href=\"\\/article\\/([^\"]+)\\//g;\nconst articles = [];\nconst seenUrls = new Set();\nlet match;\n\nwhile ((match = articleRegex.exec(html)) !== null) {\n  const articleSlug = match[1];\n  const fullUrl = `https://knowledgebase.42gears.com/article/${articleSlug}/`;\n  \n  // URL-based deduplication\n  if (!seenUrls.has(fullUrl) && articleSlug && articleSlug !== '') {\n    seenUrls.add(fullUrl);\n    articles.push({\n      id: articleSlug,\n      url: fullUrl,\n      category: category,\n      extraction_stage: 'url_discovered'\n    });\n  }\n}\n\nconsole.log(`✅ Category ${category}: Found ${articles.length} unique articles`);\nreturn articles;"
+      },
+      "name": "Extract Article URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300],
+      "id": "extract-article-urls",
+      "notes": "🔗 Extract article URLs with initial URL deduplication"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "name": "Fetch Article Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1200, 300],
+      "id": "fetch-content",
+      "notes": "📖 Fetch full content for each article"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enhanced content extraction and validation\nconst html = $input.first().json.data;\nconst articleData = $input.first().json;\n\nif (!html) {\n  console.warn(`No content for article: ${articleData.url}`);\n  return null;\n}\n\n// Extract title\nconst titleMatch = html.match(/<title>([^<]+)<\\/title>/);\nlet title = titleMatch ? titleMatch[1].replace(/\\s+/g, ' ').trim() : 'Unknown Title';\n\n// Clean title\ntitle = title.replace(/\\s*\\|\\s*42Gears.*$/, '').trim();\n\n// Extract main content\nconst contentPatterns = [\n  /<div[^>]*class=\"[^\"]*entry-content[^\"]*\"[^>]*>(.*?)<\\/div>/s,\n  /<div[^>]*class=\"[^\"]*post-content[^\"]*\"[^>]*>(.*?)<\\/div>/s,\n  /<article[^>]*>(.*?)<\\/article>/s,\n  /<main[^>]*>(.*?)<\\/main>/s\n];\n\nlet fullText = '';\nfor (const pattern of contentPatterns) {\n  const match = html.match(pattern);\n  if (match) {\n    fullText = match[1];\n    break;\n  }\n}\n\n// Clean HTML tags and normalize content\nfullText = fullText\n  .replace(/<script[^>]*>.*?<\\/script>/gs, '')\n  .replace(/<style[^>]*>.*?<\\/style>/gs, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&[a-z]+;/gi, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\n// Content validation\nif (!fullText || fullText.length < 50) {\n  console.warn(`Content too short for: ${title} (${fullText.length} chars)`);\n  return null;\n}\n\n// Skip placeholder/template articles\nif (title === 'Knowledge Base' || title.includes('Archive') || fullText.includes('This is the archive page')) {\n  console.warn(`Skipping placeholder article: ${title}`);\n  return null;\n}\n\nconst result = {\n  id: articleData.id || `article-${Date.now()}`,\n  url: articleData.url,\n  title: title,\n  category: articleData.category,\n  full_text: fullText,\n  word_count: fullText.split(' ').length,\n  char_count: fullText.length,\n  extraction_stage: 'content_extracted',\n  extracted_at: new Date().toISOString()\n};\n\nconsole.log(`✅ Extracted: \"${title}\" (${result.word_count} words)`);\nreturn result;"
+      },
+      "name": "Extract & Validate Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 300],
+      "id": "extract-content",
+      "notes": "✨ Parse HTML content with enhanced validation and cleaning"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Advanced deduplication logic\nconst articles = $input.all();\nconst validArticles = articles.filter(item => item.json !== null);\n\nconsole.log(`🔍 Deduplication: Processing ${validArticles.length} valid articles`);\n\nconst seenUrls = new Set();\nconst seenTitles = new Set();\nconst seenContentHashes = new Set();\nconst uniqueArticles = [];\nconst duplicateStats = {\n  url_duplicates: 0,\n  title_duplicates: 0,\n  content_duplicates: 0,\n  total_processed: validArticles.length\n};\n\n// Helper function to generate content hash\nfunction generateContentHash(content) {\n  if (!content) return null;\n  // Simple hash function for content comparison\n  let hash = 0;\n  for (let i = 0; i < content.length; i++) {\n    const char = content.charCodeAt(i);\n    hash = ((hash << 5) - hash) + char;\n    hash = hash & hash; // Convert to 32-bit integer\n  }\n  return hash.toString();\n}\n\nfor (const item of validArticles) {\n  const article = item.json;\n  if (!article) continue;\n  \n  const url = article.url || '';\n  const title = (article.title || '').toLowerCase().trim();\n  const content = article.full_text || '';\n  const contentHash = generateContentHash(content);\n  \n  let isDuplicate = false;\n  \n  // URL-based deduplication (highest priority)\n  if (seenUrls.has(url)) {\n    duplicateStats.url_duplicates++;\n    isDuplicate = true;\n    console.log(`❌ URL duplicate: ${title}`);\n  }\n  // Title-based deduplication  \n  else if (seenTitles.has(title)) {\n    duplicateStats.title_duplicates++;\n    isDuplicate = true;\n    console.log(`❌ Title duplicate: ${title}`);\n  }\n  // Content hash deduplication\n  else if (contentHash && seenContentHashes.has(contentHash)) {\n    duplicateStats.content_duplicates++;\n    isDuplicate = true;\n    console.log(`❌ Content duplicate: ${title}`);\n  }\n  \n  if (!isDuplicate) {\n    seenUrls.add(url);\n    seenTitles.add(title);\n    if (contentHash) seenContentHashes.add(contentHash);\n    \n    // Add deduplication metadata\n    article.dedup_processed = true;\n    article.content_hash = contentHash?.substring(0, 8);\n    \n    uniqueArticles.push(article);\n    console.log(`✅ Unique: \"${article.title}\" (${article.word_count} words)`);\n  }\n}\n\nconsole.log(`🎯 Deduplication Results:`);\nconsole.log(`   Original: ${duplicateStats.total_processed} articles`);\nconsole.log(`   Unique: ${uniqueArticles.length} articles`);\nconsole.log(`   URL duplicates removed: ${duplicateStats.url_duplicates}`);\nconsole.log(`   Title duplicates removed: ${duplicateStats.title_duplicates}`);\nconsole.log(`   Content duplicates removed: ${duplicateStats.content_duplicates}`);\n\n// Return summary + unique articles\nreturn [{\n  deduplication_summary: {\n    ...duplicateStats,\n    unique_articles: uniqueArticles.length,\n    duplicates_removed: duplicateStats.total_processed - uniqueArticles.length\n  },\n  articles: uniqueArticles\n}];"
+      },
+      "name": "Advanced Deduplication",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 300],
+      "id": "deduplication-logic",
+      "notes": "🔧 Remove duplicates using URL, title, and content hash comparison"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "http://localhost:8001/api/v2/collections/42gears-kb-enhanced",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "Clear Previous Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1800, 200],
+      "id": "clear-collection",
+      "notes": "🗑️ Delete existing collection for fresh start"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/api/v2/collections",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"name\": \"42gears-kb-enhanced\",\n  \"metadata\": {\n    \"description\": \"Enhanced 42Gears knowledge base with deduplication\",\n    \"created_by\": \"n8n_enhanced_indexer\",\n    \"version\": \"2.0\"\n  }\n}",
+        "options": {}
+      },
+      "name": "Create Enhanced Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1800, 300],
+      "id": "create-collection",
+      "notes": "🆕 Create new enhanced ChromaDB collection"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process articles in batches for ChromaDB indexing\nconst data = $input.first().json;\nconst articles = data.articles || [];\nconst batchSize = 8;\nconst batches = [];\n\nconsole.log(`📦 Creating batches for ${articles.length} articles (batch size: ${batchSize})`);\n\nfor (let i = 0; i < articles.length; i += batchSize) {\n  const batch = articles.slice(i, i + batchSize);\n  const batchData = {\n    batch_number: Math.floor(i / batchSize) + 1,\n    total_batches: Math.ceil(articles.length / batchSize),\n    articles: batch.map((article, index) => {\n      // Ensure content fits ChromaDB limits\n      let content = article.full_text || '';\n      if (content.length > 8000) {\n        content = content.substring(0, 8000) + '...[truncated]';\n      }\n      \n      return {\n        id: article.id || `enhanced-${i + index}`,\n        content: content,\n        metadata: {\n          title: article.title?.substring(0, 200) || 'Unknown',\n          category: article.category || 'unknown',\n          url: article.url || '',\n          word_count: article.word_count || 0,\n          char_count: content.length,\n          extracted_at: article.extracted_at || new Date().toISOString(),\n          extraction_type: 'enhanced_n8n',\n          content_hash: article.content_hash || 'none',\n          dedup_processed: true\n        }\n      };\n    })\n  };\n  \n  batches.push(batchData);\n}\n\nconsole.log(`✅ Created ${batches.length} batches for indexing`);\nreturn batches;"
+      },
+      "name": "Batch Articles for Indexing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300],
+      "id": "batch-articles",
+      "notes": "📦 Split articles into batches for efficient ChromaDB indexing"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/api/v2/collections/42gears-kb-enhanced/add",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"documents\": {{ JSON.stringify($json.articles.map(a => a.content)) }},\n  \"metadatas\": {{ JSON.stringify($json.articles.map(a => a.metadata)) }},\n  \"ids\": {{ JSON.stringify($json.articles.map(a => a.id)) }}\n}",
+        "options": {}
+      },
+      "name": "Index Batch in ChromaDB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, 300],
+      "id": "index-batch",
+      "notes": "🚀 Add batch to ChromaDB with enhanced metadata"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log successful batch indexing\nconst batchInfo = $input.first().json;\nconst response = $input.last().json;\n\nconsole.log(`✅ Batch ${batchInfo.batch_number}/${batchInfo.total_batches} indexed successfully`);\nconsole.log(`   Articles in batch: ${batchInfo.articles.length}`);\n\nif (response.error) {\n  console.error(`❌ ChromaDB error: ${response.error}`);\n  return { success: false, error: response.error, batch: batchInfo.batch_number };\n}\n\nreturn { \n  success: true, \n  batch_number: batchInfo.batch_number,\n  articles_count: batchInfo.articles.length,\n  indexed_at: new Date().toISOString()\n};"
+      },
+      "name": "Log Batch Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 300],
+      "id": "log-batch-success",
+      "notes": "📊 Log successful batch processing with metrics"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/api/v2/collections/42gears-kb-enhanced/query",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type", 
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"query_texts\": [\"Android device management\"],\n  \"n_results\": 3\n}",
+        "options": {}
+      },
+      "name": "Verify Search Functionality",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2600, 300],
+      "id": "verify-search",
+      "notes": "🔍 Test search functionality to ensure collection works"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Final success report\nconst searchResult = $input.first().json;\nconst allBatches = $input.all().filter(item => item.json.success);\n\nconst totalArticles = allBatches.reduce((sum, batch) => sum + (batch.json.articles_count || 0), 0);\nconst successfulBatches = allBatches.length;\n\nconst report = {\n  extraction_completed: true,\n  timestamp: new Date().toISOString(),\n  collection_name: '42gears-kb-enhanced',\n  total_articles_indexed: totalArticles,\n  batches_processed: successfulBatches,\n  search_test_passed: !!(searchResult?.documents && searchResult.documents.length > 0),\n  next_steps: [\n    'Update RAG workflows to use enhanced collection',\n    'Run integrity monitoring',\n    'Schedule regular updates'\n  ]\n};\n\nconsole.log('🎉 ENHANCED EXTRACTION COMPLETED!');\nconsole.log(`📊 Final Report:`);\nconsole.log(`   Collection: ${report.collection_name}`);\nconsole.log(`   Articles indexed: ${report.total_articles_indexed}`);\nconsole.log(`   Batches processed: ${report.batches_processed}`);\nconsole.log(`   Search test: ${report.search_test_passed ? '✅ PASSED' : '❌ FAILED'}`);\n\nreturn report;"
+      },
+      "name": "Generate Final Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2800, 300],
+      "id": "final-report",
+      "notes": "📋 Generate comprehensive completion report with metrics"
+    }
+  ],
+  "connections": {
+    "Daily Knowledge Base Sync": {
+      "main": [
+        [
+          {
+            "node": "Fetch Categories Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Categories Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Categories": {
+      "main": [
+        [
+          {
+            "node": "Fetch Category Articles", 
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Category Articles": {
+      "main": [
+        [
+          {
+            "node": "Extract Article URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Article URLs": {
+      "main": [
+        [
+          {
+            "node": "Fetch Article Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Article Content": {
+      "main": [
+        [
+          {
+            "node": "Extract & Validate Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract & Validate Content": {
+      "main": [
+        [
+          {
+            "node": "Advanced Deduplication",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Advanced Deduplication": {
+      "main": [
+        [
+          {
+            "node": "Clear Previous Collection",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create Enhanced Collection", 
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Enhanced Collection": {
+      "main": [
+        [
+          {
+            "node": "Batch Articles for Indexing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Articles for Indexing": {
+      "main": [
+        [
+          {
+            "node": "Index Batch in ChromaDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Index Batch in ChromaDB": {
+      "main": [
+        [
+          {
+            "node": "Log Batch Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Batch Success": {
+      "main": [
+        [
+          {
+            "node": "Verify Search Functionality",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Search Functionality": {
+      "main": [
+        [
+          {
+            "node": "Generate Final Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": null,
+  "triggerCount": 1,
+  "tags": []
+}]

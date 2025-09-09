@@ -1,0 +1,301 @@
+version: '3.8'
+
+services:
+  # =============================================================================
+  # EXISTING SERVICES (keeping your current setup exactly as is)
+  # =============================================================================
+  
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: aura-postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/database/init:/docker-entrypoint-initdb.d
+    networks:
+      - aura_network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # n8n Workflow Engine
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.106.3
+    container_name: aura-n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - N8N_USER_MANAGEMENT_DISABLED=true
+      - N8N_DIAGNOSTICS_ENABLED=true
+      - N8N_HIRING_BANNER_ENABLED=false
+      - N8N_VERSION_NOTIFICATIONS_ENABLED=true
+      - NODE_ENV=production
+      - N8N_LOG_LEVEL=info
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=postgres
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=postgres
+      - N8N_PERSONALIZATION_ENABLED=false
+      - N8N_DISABLE_PRODUCTION_MAIN_PROCESS=false
+      - N8N_SKIP_WEBHOOK_SETUP=true
+      - N8N_ONBOARDING_FLOW_DISABLED=true
+      - N8N_INITIAL_OWNER_EMAIL=nelson@42gears.com
+      - N8N_INITIAL_OWNER_PASSWORD=42Gears@1234
+      - N8N_COMMUNITY_PACKAGES_ENABLED=true
+      - N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true
+      - GEMINI_API_KEY=AIzaSyAwp1WEosoyt8R9wgM_x_rPp8Wx18PRnyM
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - aura_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # n8n MCP Server
+  n8n_mcp_server:
+    build:
+      context: ./docker
+      dockerfile: mcp-servers/n8n/Dockerfile
+    container_name: aura-n8n_mcp_server
+    ports:
+      - "3001:3001"
+    environment:
+      - N8N_BASE_URL=http://n8n:5678
+      - N8N_API_KEY=n8n_api_42gears_key_2025
+      - MCP_PORT=3001
+    volumes:
+      - n8n_mcp_data:/app/data
+    networks:
+      - aura_network
+    depends_on:
+      - n8n
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =============================================================================
+  # REDIS (Adding for rate limiting and caching)
+  # =============================================================================
+  
+  redis:
+    image: redis:7-alpine
+    container_name: aura-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aura_network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =============================================================================
+  # NEW MCP SERVICES
+  # =============================================================================
+
+  mcp-unified-server:
+    build:
+      context: ./docker/mcp-servers
+      dockerfile: Dockerfile
+    container_name: aura-mcp-unified-server
+    ports:
+      - "9000:9000"
+    environment:
+      # API Keys
+      - FRESHDESK_DOMAIN=${FRESHDESK_DOMAIN}
+      - FRESHDESK_API_KEY=${FRESHDESK_API_KEY}
+      - INTERCOM_ACCESS_TOKEN=${INTERCOM_ACCESS_TOKEN}
+      - INTERCOM_CLIENT_ID=${INTERCOM_CLIENT_ID}
+      - INTERCOM_CLIENT_SECRET=${INTERCOM_CLIENT_SECRET}
+      
+      # Database Configuration
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-aura_mcp}
+      - POSTGRES_USER=${POSTGRES_USER:-aura_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # MCP Configuration
+      - MCP_PROTOCOL_VERSION=${MCP_PROTOCOL_VERSION}
+      - MCP_TRANSPORT=http
+      - MCP_SERVER_PORT=9000
+      
+      # Rate Limiting
+      - ENABLE_RATE_LIMITING=${ENABLE_RATE_LIMITING}
+      - MAX_REQUESTS_PER_MINUTE=${MAX_REQUESTS_PER_MINUTE}
+      
+      # Webhook URLs for n8n integration
+      - N8N_WEBHOOK_URL=http://n8n:5678/webhook
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+    volumes:
+      - mcp_logs:/app/logs
+      - mcp_data:/app/data
+    depends_on:
+      - postgres
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - aura_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend-proxy:
+    build:
+      context: ./docker/backend-proxy
+      dockerfile: Dockerfile
+    container_name: aura-backend-proxy
+    environment:
+      - MCP_SERVER_URL=http://mcp-unified-server:9000
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - API_TOKEN=${API_TOKEN}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    ports:
+      - "9100:9100"
+    depends_on:
+      - mcp-unified-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-X", "GET", "http://localhost:9100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - aura_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  react-client:
+    build:
+      context: ./docker/client
+      dockerfile: Dockerfile
+    container_name: aura-react-client
+    environment:
+      - REACT_APP_BACKEND_PROXY_URL=http://localhost:9100
+      - REACT_APP_MCP_SERVER_URL=http://localhost:9000
+      - REACT_APP_ENVIRONMENT=${ENVIRONMENT:-production}
+    ports:
+      - "9200:80"
+    depends_on:
+      - backend-proxy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - aura_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  webhook-service:
+    build:
+      context: ./docker/webhooks
+      dockerfile: Dockerfile
+    container_name: aura-webhook-service
+    environment:
+      - WEBHOOK_PORT=9300
+      - MCP_SERVER_URL=http://mcp-unified-server:9000
+      - N8N_WEBHOOK_URL=http://n8n:5678/webhook
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=aura_mcp
+      - POSTGRES_USER=aura_user
+      - POSTGRES_PASSWORD=aura_secure_pass
+    ports:
+      - "9300:9300"
+    depends_on:
+      - postgres
+      - mcp-unified-server
+      - n8n
+    networks:
+      - aura_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+
+volumes:
+  postgres_data:
+  n8n_data:
+  n8n_mcp_data:
+  redis_data:
+  mcp_logs:
+  mcp_data:
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+
+networks:
+  aura_network:
+    driver: bridge

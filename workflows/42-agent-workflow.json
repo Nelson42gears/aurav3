@@ -1,0 +1,239 @@
+[{
+  "name": "42Gears AI Tech Lead Workflow",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "path": "freshdesk-mcp-trigger",
+        "httpMethod": "POST",
+        "options": {}
+      },
+      "id": "webhook-trigger-42agent",
+      "name": "Freshdesk MCP Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.2,
+      "position": [250, 300],
+      "notes": "🚀 Trigger from Freshdesk MCP on ticket assignment.\nAccepts POST payload with ticket details."
+    },
+    {
+      "parameters": {
+        "jsCode": "const ticket = $json;\n// Skip logic: Only process high/medium priority, technical tickets\nconst skip = !['high', 'medium'].includes(ticket.priority?.toLowerCase()) || ticket.type?.toLowerCase() !== 'technical';\nreturn [{ skipAI: skip, ticket }];"
+      },
+      "id": "filter-ticket-priority",
+      "name": "Smart Ticket Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "notes": "⚡ Filters out simple/low-value tickets to save AI cost."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skipAI }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-ai-needed",
+      "name": "AI Processing Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [750, 300],
+      "notes": "🔀 Routes only complex tickets to AI nodes."
+    },
+    {
+      "parameters": {
+        "url": "https://knowledgebase.42gears.com/search?q={{ $json.ticket.subject }}",
+        "authentication": "none",
+        "requestMethod": "GET",
+        "options": {}
+      },
+      "id": "kb-retrieval-node",
+      "name": "KB Retrieval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 200],
+      "notes": "📚 Retrieves relevant KB content based on ticket subject."
+    },
+    {
+      "parameters": {
+        "url": "https://docs.42gears.com/search?q={{ $json.ticket.subject }}",
+        "authentication": "none",
+        "requestMethod": "GET",
+        "options": {}
+      },
+      "id": "docs-retrieval-node",
+      "name": "Docs Retrieval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 400],
+      "notes": "📘 Retrieves relevant product documentation."
+    },
+    {
+      "parameters": {
+        "jsCode": "const kbContent = $items(\"KB Retrieval\", 0)?.[0]?.json || '';\nconst docsContent = $items(\"Docs Retrieval\", 0)?.[0]?.json || '';\nconst ticket = $json.ticket;\nreturn [{\n  ticket,\n  knowledge: (kbContent + '\\n' + docsContent).trim()\n}];"
+      },
+      "id": "merge-knowledge-sources",
+      "name": "Merge KB + Docs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "notes": "🧩 Combines KB and Docs content for AI context."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a senior 42Gears technical architect. Analyze the support ticket and provide:\\n1. Root cause analysis\\n2. Step-by-step solution\\n3. Preventive measures\\n4. Relevant KB/Docs references\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Ticket: {{ $json.ticket.description }}\\n\\nKnowledge: {{ $json.knowledge }}\"\n    }\n  ],\n  \"temperature\": 0.3,\n  \"max_tokens\": 1000\n}",
+        "options": {}
+      },
+      "id": "ai-tech-lead-analysis",
+      "name": "AI Tech Lead Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1500, 300],
+      "notes": "🤖 Generates tech-lead style solution using GPT."
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8000/api/tickets/{{ $json.ticket.id }}/notes",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"ticket_id\": \"{{ $json.ticket.id }}\",\n  \"note\": \"{{ $json.choices[0].message.content }}\",\n  \"private\": true\n}",
+        "options": {}
+      },
+      "id": "add-internal-note-mcp",
+      "name": "Add Internal Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1750, 300],
+      "notes": "📤 Sends AI output back to Freshdesk as an internal note via MCP."
+    }
+  ],
+  "connections": {
+    "Freshdesk MCP Trigger": {
+      "main": [
+        [
+          {
+            "node": "Smart Ticket Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Smart Ticket Filter": {
+      "main": [
+        [
+          {
+            "node": "AI Processing Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Processing Needed?": {
+      "main": [
+        [
+          {
+            "node": "KB Retrieval",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Docs Retrieval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KB Retrieval": {
+      "main": [
+        [
+          {
+            "node": "Merge KB + Docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Docs Retrieval": {
+      "main": [
+        [
+          {
+            "node": "Merge KB + Docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge KB + Docs": {
+      "main": [
+        [
+          {
+            "node": "AI Tech Lead Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Tech Lead Analysis": {
+      "main": [
+        [
+          {
+            "node": "Add Internal Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {}
+}]

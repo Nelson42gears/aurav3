@@ -1,0 +1,223 @@
+{
+  "name": "Freshdesk Chat Interface",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "freshdesk-chat",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-trigger",
+      "name": "Chat Input Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.action}}",
+              "rightValue": "search_tickets",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combineOperation": "any"
+        }
+      },
+      "id": "router",
+      "name": "Action Router",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "domain": "{{ $('Chat Input Webhook').item.json.freshdesk_domain || '42gears.freshdesk.com' }}",
+        "resource": "ticket",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": "{{ $('Chat Input Webhook').item.json.limit || 10 }}",
+        "filters": {
+          "query": "{{ $('Chat Input Webhook').item.json.query || '' }}"
+        },
+        "credentials": {
+          "freshdeskApi": {
+            "id": "freshdesk-credentials"
+          }
+        }
+      },
+      "id": "freshdesk-search",
+      "name": "Search Freshdesk Tickets",
+      "type": "n8n-nodes-base.freshdesk",
+      "typeVersion": 1,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "domain": "{{ $('Chat Input Webhook').item.json.freshdesk_domain || '42gears.freshdesk.com' }}",
+        "resource": "ticket",
+        "operation": "create",
+        "subject": "{{ $('Chat Input Webhook').item.json.subject }}",
+        "description": "{{ $('Chat Input Webhook').item.json.description }}",
+        "status": 2,
+        "priority": "{{ $('Chat Input Webhook').item.json.priority || 1 }}",
+        "credentials": {
+          "freshdeskApi": {
+            "id": "freshdesk-credentials"
+          }
+        }
+      },
+      "id": "freshdesk-create",
+      "name": "Create Freshdesk Ticket",
+      "type": "n8n-nodes-base.freshdesk",
+      "typeVersion": 1,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format response for chat interface\nconst items = $input.all();\nconst action = $('Chat Input Webhook').item.json.action;\n\nlet response = {\n  success: true,\n  action: action,\n  timestamp: new Date().toISOString(),\n  data: []\n};\n\nif (action === 'search_tickets') {\n  response.data = items.map(item => ({\n    id: item.json.id,\n    subject: item.json.subject,\n    status: item.json.status_name || item.json.status,\n    priority: item.json.priority_name || item.json.priority,\n    created_at: item.json.created_at,\n    requester: item.json.requester_name,\n    description: item.json.description_text?.substring(0, 200) + '...' || 'No description'\n  }));\n  response.message = `Found ${response.data.length} tickets`;\n} else if (action === 'create_ticket') {\n  response.data = [{\n    id: items[0].json.id,\n    subject: items[0].json.subject,\n    status: 'Open',\n    created_at: items[0].json.created_at\n  }];\n  response.message = `Ticket #${items[0].json.id} created successfully`;\n}\n\nreturn [{ json: response }];"
+      },
+      "id": "format-response",
+      "name": "Format Chat Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "webhook-response",
+      "name": "Send Chat Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.action}}",
+              "rightValue": "create_ticket",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combineOperation": "any"
+        }
+      },
+      "id": "create-router",
+      "name": "Create Ticket Router",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 500]
+    }
+  ],
+  "connections": {
+    "Chat Input Webhook": {
+      "main": [
+        [
+          {
+            "node": "Action Router",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create Ticket Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action Router": {
+      "main": [
+        [
+          {
+            "node": "Search Freshdesk Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Freshdesk Tickets": {
+      "main": [
+        [
+          {
+            "node": "Format Chat Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Freshdesk Ticket": {
+      "main": [
+        [
+          {
+            "node": "Format Chat Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Chat Response": {
+      "main": [
+        [
+          {
+            "node": "Send Chat Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Ticket Router": {
+      "main": [
+        [
+          {
+            "node": "Create Freshdesk Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2025-08-09T12:00:00.000Z",
+      "updatedAt": "2025-08-09T12:00:00.000Z",
+      "id": "freshdesk-chat",
+      "name": "freshdesk-chat"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-08-09T12:00:00.000Z",
+  "versionId": "1"
+}

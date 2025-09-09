@@ -1,0 +1,357 @@
+from fastapi import FastAPI, HTTPException, Request, Depends, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import BaseModel
+import os
+import json
+import uuid
+import requests
+import logging
+from datetime import datetime
+from typing import Optional, Dict, Any, List, Union
+import asyncio
+
+# MCP Session Manager for StreamableHTTP protocol compliance
+class MCPSessionManager:
+    """Manages MCP StreamableHTTP session lifecycle for backend proxy"""
+    def __init__(self, mcp_server_url: str):
+        self.mcp_server_url = mcp_server_url.rstrip('/')
+        self.session_id: Optional[str] = None
+        self.initialized = False
+        self._lock = asyncio.Lock()
+    
+    async def get_session_id(self) -> str:
+        """Get valid session ID, initialize if needed"""
+        async with self._lock:
+            if not self.initialized or not self.session_id:
+                await self._initialize_mcp_session()
+            return self.session_id
+    
+    async def _initialize_mcp_session(self):
+        """Send MCP initialize request and capture server session ID"""
+        logger.info("Initializing MCP session...")
+        
+        init_request = {
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "clientInfo": {"name": "Aura-Backend-Proxy", "version": "1.0.0"}
+            },
+            "id": f"init_{uuid.uuid4()}"
+        }
+        
+        response = requests.post(
+            f"{self.mcp_server_url}/mcp/",
+            json=init_request,
+            headers={
+                'Content-Type': 'application/json',
+                'Accept': 'application/json, text/event-stream',
+                'User-Agent': 'Aura-Backend-Proxy/1.0.0'
+            },
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"MCP initialize failed: {response.status_code} - {response.text}")
+        
+        session_id = response.headers.get('Mcp-Session-Id')
+        if not session_id:
+            raise Exception("Server did not return Mcp-Session-Id header")
+        
+        self.session_id = session_id
+        self.initialized = True
+        logger.info(f"MCP session initialized: {session_id}")
+    
+    async def reset_session(self):
+        """Reset session for error recovery"""
+        async with self._lock:
+            self.session_id = None
+            self.initialized = False
+            logger.info("MCP session reset for re-initialization")
+
+app = FastAPI(title="Aura Backend Proxy", version="1.0.0")
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize MCP session manager
+mcp_session_manager = MCPSessionManager(os.getenv("MCP_SERVER_URL", "http://mcp-unified-server:9000"))
+
+# Environment variables
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://mcp-unified-server:9000")
+API_TOKEN = os.getenv("API_TOKEN", "your-secure-token")
+
+# Logging configuration
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class HealthCheck(BaseModel):
+    status: str = "ok"
+    timestamp: str = None
+    services: Dict[str, Any] = {}
+
+# Security: API Token verification
+async def verify_token(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid authorization header"
+        )
+    
+    token = auth_header.split(" ")[1]
+    if token != API_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API token"
+        )
+    return True
+
+@app.get("/health")
+async def health_check():
+    """Basic health check endpoint"""
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+@app.post("/api/health", dependencies=[Depends(verify_token)])
+async def detailed_health_check():
+    """Detailed health check with MCP server status"""
+    
+    health_data = {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "checks": {
+            "mcp_server": {
+                "status": "pending",
+                "endpoint": f"{os.getenv('MCP_SERVER_URL', 'http://mcp-unified-server:9000')}/mcp",
+                "error": None,
+                "response_time_ms": None
+            },
+            "database": {
+                "status": "not_implemented",
+                "error": "Database health check not implemented"
+            },
+            "external_apis": {
+                "status": "not_implemented", 
+                "error": "External API health checks not implemented"
+            }
+        }
+    }
+    
+    # Test MCP server connectivity
+    start_time = datetime.now()
+    try:
+        mcp_response = requests.post(
+            f"{os.getenv('MCP_SERVER_URL', 'http://mcp-unified-server:9000')}/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "health_check",
+                "params": {},
+                "id": str(uuid.uuid4())
+            },
+            headers={
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            timeout=10
+        )
+        
+        response_time = (datetime.now() - start_time).total_seconds() * 1000
+        health_data["checks"]["mcp_server"]["response_time_ms"] = round(response_time, 2)
+        
+        if mcp_response.status_code == 200:
+            health_data["checks"]["mcp_server"]["status"] = "healthy"
+        else:
+            health_data["checks"]["mcp_server"]["status"] = "unhealthy"
+            health_data["checks"]["mcp_server"]["error"] = f"HTTP {mcp_response.status_code}"
+            health_data["status"] = "degraded"
+            
+    except Exception as e:
+        health_data["checks"]["mcp_server"]["status"] = "unhealthy"
+        health_data["checks"]["mcp_server"]["error"] = str(e)
+        health_data["status"] = "degraded"
+    
+    return health_data
+
+async def handle_mcp_request(path: str, request: Request, method: str = 'GET') -> Dict[str, Any]:
+    logger.info(f"Handling {method} request for path: {path}")
+    """Handle MCP protocol request with proper formatting"""
+    # Extract method name and platform from path
+    path_parts = path.strip('/').split('/')
+    
+    if len(path_parts) >= 2:
+        platform = path_parts[0]  # e.g., 'unified', 'freshdesk', 'intercom'
+        tool_name = path_parts[1]  # e.g., 'health_check', 'search_tickets'
+        
+        # Clean method name - remove platform prefixes if present
+        if tool_name.startswith(f"{platform}_"):
+            method_name = tool_name
+        else:
+            method_name = tool_name
+    else:
+        # Fallback for single-part paths
+        method_name = path_parts[0] if path_parts else 'health_check'
+    
+    logger.info(f"Calling MCP method: {method_name}")
+    
+    # Extract parameters from request body
+    params = {}
+    if method.upper() == 'POST':
+        try:
+            request_body = await request.body()
+            if request_body:
+                request_data = json.loads(request_body.decode('utf-8'))
+                
+                # Handle different request formats
+                if isinstance(request_data, dict):
+                    # If it's already a dict, use it as params
+                    if 'params' in request_data:
+                        # If it has a 'params' key, extract that
+                        params = request_data['params']
+                    else:
+                        # Otherwise use the entire body as params
+                        params = request_data
+                else:
+                    params = {}
+                logger.info(f"Extracted params: {params}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse POST data: {e}")
+            params = {}
+    
+    # Get valid MCP session ID
+    try:
+        valid_session_id = await mcp_session_manager.get_session_id()
+    except Exception as e:
+        logger.error(f"MCP session initialization failed: {e}")
+        raise HTTPException(status_code=500, detail="MCP session unavailable")
+    
+    # Create clean JSON-RPC request with proper session
+    request_id = str(uuid.uuid4())
+    
+    # Prepare CLEAN MCP protocol request - NO double wrapping
+    mcp_request = {
+        "jsonrpc": "2.0",
+        "method": method_name,
+        "params": params,
+        "id": request_id
+    }
+    logger.info(f"MCP request: {json.dumps(mcp_request)}")
+    
+    try:
+        # Forward request to MCP server
+        try:
+            logger.info(f"Sending request to MCP server: {MCP_SERVER_URL}/mcp/")
+            
+            response = requests.post(
+                f"{MCP_SERVER_URL}/mcp/",
+                json=mcp_request,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json, text/event-stream',
+                    'User-Agent': 'Aura-Backend-Proxy/1.0.0',
+                    'Mcp-Session-Id': valid_session_id
+                },
+                timeout=30,
+                verify=False
+            )
+            logger.info(f"MCP request sent to: {MCP_SERVER_URL}/mcp/")
+            
+            # Handle HTTP errors
+            try:
+                response.raise_for_status()
+                
+                # Handle session-related errors
+                if response.status_code == 400 and 'session' in response.text.lower():
+                    logger.warning("Session error detected, resetting for retry")
+                    await mcp_session_manager.reset_session()
+                    raise HTTPException(status_code=500, detail="Session error - please retry request")
+                elif response.status_code == 404:
+                    logger.warning("Session not found, resetting for retry")
+                    await mcp_session_manager.reset_session()
+                    raise HTTPException(status_code=500, detail="Session expired - please retry request")
+            except requests.exceptions.HTTPError as e:
+                status_code = e.response.status_code
+                error_msg = str(e)
+                
+                # Handle 404 errors
+                if status_code == 404:
+                    logger.warning("MCP server returned 404 Not Found")
+                    raise HTTPException(
+                        status_code=404,
+                        detail="MCP endpoint not found"
+                    )
+                
+                # Handle other HTTP errors
+                logger.error(f"MCP server HTTP error {status_code}: {error_msg}")
+                raise HTTPException(
+                    status_code=status_code,
+                    detail=f"MCP server HTTP error {status_code}: {error_msg}"
+                )
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error forwarding request to MCP server: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error forwarding request to MCP server: {str(e)}"
+            )
+        response.raise_for_status()
+        
+        # Process JSON-RPC response - NO STREAMING
+        try:
+            # Parse JSON response from MCP server
+            mcp_response_data = response.json()
+            logger.info(f"MCP server response: {json.dumps(mcp_response_data)}")
+            
+            # Return result directly as JSON
+            if 'result' in mcp_response_data:
+                logger.info("Returning MCP result to client")
+                return JSONResponse(content=mcp_response_data['result'])
+            elif 'error' in mcp_response_data:
+                logger.error(f"MCP server error: {mcp_response_data['error']}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"MCP server error: {mcp_response_data['error']['message']}"
+                )
+            else:
+                logger.info("Returning full MCP response")
+                return JSONResponse(content=mcp_response_data)
+                
+        except Exception as e:
+            logger.error(f"Unexpected error processing MCP response: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Unexpected error processing MCP response: {str(e)}"
+            )
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in handle_mcp_request: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error: {str(e)}"
+        )
+
+# Dynamic route handlers for all MCP methods
+@app.post("/api/{path:path}", dependencies=[Depends(verify_token)])
+async def handle_post_request(path: str, request: Request):
+    """Handle all POST requests to MCP endpoints"""
+    return await handle_mcp_request(path, request, 'POST')
+
+@app.get("/api/{path:path}", dependencies=[Depends(verify_token)])
+async def handle_get_request(path: str, request: Request):
+    """Handle all GET requests to MCP endpoints"""
+    return await handle_mcp_request(path, request, 'GET')
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=9100)

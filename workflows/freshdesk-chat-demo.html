@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Freshdesk Chat - n8n Integration</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background: #f5f5f5; 
+        }
+        .chat-container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            border-radius: 10px; 
+            padding: 20px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+        }
+        .chat-header { 
+            text-align: center; 
+            border-bottom: 2px solid #eee; 
+            padding-bottom: 20px; 
+            margin-bottom: 20px; 
+        }
+        .chat-messages { 
+            height: 400px; 
+            overflow-y: auto; 
+            border: 1px solid #eee; 
+            padding: 15px; 
+            margin-bottom: 20px; 
+            background: #fafafa; 
+        }
+        .message { 
+            margin-bottom: 15px; 
+            padding: 10px; 
+            border-radius: 5px; 
+        }
+        .user-message { 
+            background: #007bff; 
+            color: white; 
+            text-align: right; 
+        }
+        .bot-message { 
+            background: #e9ecef; 
+            color: #333; 
+        }
+        .input-group { 
+            display: flex; 
+            gap: 10px; 
+            margin-bottom: 10px; 
+        }
+        .input-group input, .input-group select { 
+            padding: 10px; 
+            border: 1px solid #ddd; 
+            border-radius: 5px; 
+        }
+        .input-group input[type="text"] { 
+            flex: 1; 
+        }
+        .input-group button { 
+            padding: 10px 20px; 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+        }
+        .input-group button:hover { 
+            background: #0056b3; 
+        }
+        .ticket-result { 
+            background: #e8f5e8; 
+            border: 1px solid #c3e6c3; 
+            padding: 10px; 
+            margin: 5px 0; 
+            border-radius: 5px; 
+        }
+        .ticket-result h4 { 
+            margin: 0 0 5px 0; 
+            color: #2d5a2d; 
+        }
+        .ticket-meta { 
+            font-size: 12px; 
+            color: #666; 
+            margin-top: 5px; 
+        }
+        .comparison { 
+            margin-top: 30px; 
+            padding: 20px; 
+            background: #fff3cd; 
+            border-radius: 5px; 
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>🎯 Freshdesk Chat Interface</h1>
+            <p><strong>n8n Native Integration</strong> vs MCP Server Comparison</p>
+        </div>
+        
+        <div class="chat-messages" id="messages">
+            <div class="message bot-message">
+                <strong>Freshdesk Assistant:</strong> Hello! I can help you search tickets or create new ones. 
+                Try: "search urgent tickets" or "create a new ticket"
+            </div>
+        </div>
+        
+        <div class="input-group">
+            <select id="action">
+                <option value="search_tickets">Search Tickets</option>
+                <option value="create_ticket">Create Ticket</option>
+            </select>
+            <input type="text" id="query" placeholder="Enter search query or ticket subject...">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+        
+        <div class="input-group" id="create-fields" style="display:none;">
+            <input type="text" id="subject" placeholder="Ticket Subject">
+            <textarea id="description" placeholder="Ticket Description" style="flex:1; padding:10px; border:1px solid #ddd; border-radius:5px;"></textarea>
+        </div>
+    </div>
+    
+    <div class="comparison">
+        <h2>⚡ Real-Time Comparison</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div>
+                <h3>n8n Native Freshdesk (This Demo)</h3>
+                <ul>
+                    <li>✅ Built-in Freshdesk node</li>
+                    <li>✅ Visual workflow editor</li>
+                    <li>✅ Error handling & retries</li>
+                    <li>✅ No custom code needed</li>
+                    <li>✅ Direct API integration</li>
+                    <li>✅ Production-ready</li>
+                </ul>
+            </div>
+            <div>
+                <h3>MCP Freshdesk Server</h3>
+                <ul>
+                    <li>❌ Custom Docker container</li>
+                    <li>❌ JSON-RPC protocol overhead</li>
+                    <li>❌ Limited to 5 tools</li>
+                    <li>❌ Custom maintenance required</li>
+                    <li>❌ Extra network hops</li>
+                    <li>❌ Protocol for protocol's sake</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('action').addEventListener('change', function() {
+            const createFields = document.getElementById('create-fields');
+            createFields.style.display = this.value === 'create_ticket' ? 'block' : 'none';
+        });
+
+        function addMessage(text, isUser = false) {
+            const messages = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+            messageDiv.innerHTML = text;
+            messages.appendChild(messageDiv);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const action = document.getElementById('action').value;
+            const query = document.getElementById('query').value;
+            
+            if (!query.trim()) return;
+            
+            // Show user message
+            addMessage(`<strong>You:</strong> ${action.replace('_', ' ')} - ${query}`, true);
+            
+            // Simulate n8n webhook call (replace with actual webhook URL)
+            const webhookUrl = 'http://localhost:5678/webhook/freshdesk-chat';
+            
+            let payload = {
+                action: action,
+                query: query,
+                timestamp: new Date().toISOString()
+            };
+            
+            if (action === 'create_ticket') {
+                payload.subject = document.getElementById('subject').value;
+                payload.description = document.getElementById('description').value;
+            }
+            
+            try {
+                // Simulate response (replace with actual fetch call)
+                addMessage('<strong>Freshdesk Assistant:</strong> Processing your request...', false);
+                
+                setTimeout(() => {
+                    if (action === 'search_tickets') {
+                        const mockResults = `
+                            <strong>Found 3 tickets:</strong><br>
+                            <div class="ticket-result">
+                                <h4>#1234 - Login Issues</h4>
+                                <p>User unable to access dashboard...</p>
+                                <div class="ticket-meta">Status: Open | Priority: High | Created: 2 hours ago</div>
+                            </div>
+                            <div class="ticket-result">
+                                <h4>#1235 - Payment Problem</h4>
+                                <p>Credit card transaction failed...</p>
+                                <div class="ticket-meta">Status: Pending | Priority: Medium | Created: 4 hours ago</div>
+                            </div>
+                        `;
+                        addMessage(`<strong>Freshdesk Assistant:</strong> ${mockResults}`, false);
+                    } else {
+                        addMessage(`<strong>Freshdesk Assistant:</strong> ✅ Ticket created successfully! 
+                                   <div class="ticket-result">
+                                       <h4>#1236 - ${payload.subject}</h4>
+                                       <p>${payload.description}</p>
+                                       <div class="ticket-meta">Status: Open | Just created</div>
+                                   </div>`, false);
+                    }
+                }, 1000);
+                
+            } catch (error) {
+                addMessage('<strong>Error:</strong> Could not connect to n8n webhook. Make sure the workflow is active!', false);
+            }
+            
+            // Clear inputs
+            document.getElementById('query').value = '';
+            document.getElementById('subject').value = '';
+            document.getElementById('description').value = '';
+        }
+        
+        // Enter key support
+        document.getElementById('query').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') sendMessage();
+        });
+    </script>
+</body>
+</html>

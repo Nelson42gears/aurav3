@@ -1,0 +1,222 @@
+{
+  "createdAt": "2025-08-10T17:11:03.591Z",
+  "updatedAt": "2025-08-10T17:11:03.591Z",
+  "id": "F8eRDOPH4U3OE9zo",
+  "name": "Support Ticket to Bug Report",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "freshdesk-webhook",
+        "options": {}
+      },
+      "id": "freshdesk-webhook-trigger",
+      "name": "Freshdesk Ticket Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "freshdesk-ticket-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bug-tag-check",
+              "leftValue": "={{ $json.ticket.tags }}",
+              "rightValue": "bug",
+              "operator": {
+                "type": "array",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-for-bug-tag",
+      "name": "Check for Bug Tag",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.atlassian.com/ex/jira/v1/issue",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "jiraApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "={\"project\":{\"key\":\"ENG\"},\"summary\":\"Freshdesk Bug: {{ $('Freshdesk Ticket Webhook').item.json.ticket.subject }}\",\"description\":\"Customer message: {{ $('Freshdesk Ticket Webhook').item.json.ticket.description }}\\n\\nLink to Freshdesk Ticket: {{ $('Freshdesk Ticket Webhook').item.json.ticket.url }}\",\"issuetype\":{\"name\":\"Bug\"},\"assignee\":{\"name\":\"engineering-team-lead\"}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-jira-bug-report",
+      "name": "Create Jira Bug Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://chat.googleapis.com/v1/spaces/support-alerts/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=A new bug report has been created in Jira for ticket #{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}: {{ $('Create Jira Bug Report').item.json.key }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notify-support-manager",
+      "name": "Notify Support Manager",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://{{ $credentials.freshdesk.domain }}.freshdesk.com/api/v2/tickets/{{ $('Freshdesk Ticket Webhook').item.json.ticket.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "freshdeskApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "notes",
+              "value": "=Bug report created in Jira: {{ $('Create Jira Bug Report').item.json.key }}"
+            },
+            {
+              "name": "status",
+              "value": "4"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-freshdesk-ticket",
+      "name": "Update Freshdesk Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Freshdesk Ticket Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check for Bug Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Bug Tag": {
+      "main": [
+        [
+          {
+            "node": "Create Jira Bug Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Jira Bug Report": {
+      "main": [
+        [
+          {
+            "node": "Notify Support Manager",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Support Manager": {
+      "main": [
+        [
+          {
+            "node": "Update Freshdesk Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "1                                   ",
+  "triggerCount": 0,
+  "tags": []
+}

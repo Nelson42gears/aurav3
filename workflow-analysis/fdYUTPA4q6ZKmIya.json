@@ -1,0 +1,397 @@
+{
+  "createdAt": "2025-08-11T01:16:19.182Z",
+  "updatedAt": "2025-08-11T01:16:19.182Z",
+  "id": "fdYUTPA4q6ZKmIya",
+  "name": "Knowledge Base to Community Sync",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "knowledge-sync-scheduler",
+      "name": "Knowledge Sync Scheduler",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://{{ $credentials.wordpress.domain }}/wp-json/wp/v2/posts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "wordPressApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "publish"
+            },
+            {
+              "name": "categories",
+              "value": "knowledge-base"
+            },
+            {
+              "name": "per_page",
+              "value": "50"
+            },
+            {
+              "name": "orderby",
+              "value": "modified"
+            },
+            {
+              "name": "order",
+              "value": "desc"
+            },
+            {
+              "name": "modified_after",
+              "value": "={{ DateTime.now().minus({ hours: 6 }).toISO() }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.wordpress.apiToken }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-updated-wordpress-articles",
+      "name": "Fetch Updated WordPress Articles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "articles-found",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": "0",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-if-articles-found",
+      "name": "Check if Articles Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://{{ $credentials.discourse.domain }}/categories.json",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "discourseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Api-Key",
+              "value": "{{ $credentials.discourse.apiKey }}"
+            },
+            {
+              "name": "Api-Username",
+              "value": "{{ $credentials.discourse.username }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-discourse-categories",
+      "name": "Fetch Discourse Categories",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const articles = $input.first().json;\nconst categories = $input.last().json.category_list.categories;\n\n// Find or create Knowledge Base category\nlet knowledgeBaseCategory = categories.find(cat => \n  cat.name.toLowerCase() === 'knowledge base' || \n  cat.slug === 'knowledge-base'\n);\n\nif (!knowledgeBaseCategory) {\n  knowledgeBaseCategory = {\n    id: 999, // Will be created in next step\n    name: 'Knowledge Base',\n    slug: 'knowledge-base'\n  };\n}\n\n// Process each WordPress article\nconst processedArticles = articles.map(article => {\n  return {\n    wordpress_id: article.id,\n    title: article.title.rendered,\n    content: article.content.rendered,\n    excerpt: article.excerpt.rendered,\n    slug: article.slug,\n    modified_date: article.modified,\n    categories: article.categories,\n    tags: article.tags,\n    discourse_category_id: knowledgeBaseCategory.id,\n    discourse_category_name: knowledgeBaseCategory.name,\n    author: article.author,\n    featured_media: article.featured_media,\n    link: article.link\n  };\n});\n\nreturn processedArticles.map(article => ({ json: article }));"
+      },
+      "id": "process-articles-for-discourse",
+      "name": "Process Articles for Discourse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $credentials.discourse.domain }}/posts.json",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "discourseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Api-Key",
+              "value": "{{ $credentials.discourse.apiKey }}"
+            },
+            {
+              "name": "Api-Username",
+              "value": "{{ $credentials.discourse.username }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "=📚 KB Update: {{ $json.title }}"
+            },
+            {
+              "name": "raw",
+              "value": "=**🔗 Knowledge Base Article Update**\\n\\n**Original Article:** [{{ $json.title }}]({{ $json.link }})\\n**Last Modified:** {{ $json.modified_date }}\\n\\n---\\n\\n## Summary\\n{{ $json.excerpt }}\\n\\n## Full Content\\n{{ $json.content }}\\n\\n---\\n\\n**📝 Source:** WordPress Knowledge Base\\n**🏷️ Tags:** {{ $json.tags.join(', ') }}\\n**👤 Author:** {{ $json.author }}\\n\\n*This post was automatically synced from our Knowledge Base. For the most up-to-date version, please visit the original article.*"
+            },
+            {
+              "name": "category",
+              "value": "={{ $json.discourse_category_id }}"
+            },
+            {
+              "name": "tags",
+              "value": "=knowledge-base,wordpress-sync,{{ $json.slug }}"
+            }
+          ]
+        }
+      },
+      "id": "create-discourse-post",
+      "name": "Create Discourse Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "📚 Knowledge Base articles synced to community"
+            },
+            {
+              "name": "blocks",
+              "value": "=[{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"📚 *Knowledge Base Community Sync*\\n\\n*{{ $json.title }}*\\n\\n*WordPress ID:* {{ $json.wordpress_id }}\\n*Discourse Post:* <{{ $('Create Discourse Post').item.json.topic_slug }}|View Discussion>\\n*Last Modified:* {{ $json.modified_date }}\\n*Author:* {{ $json.author }}\"}},{\"type\":\"actions\",\"elements\":[{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"View KB Article\"},\"url\":\"{{ $json.link }}\"},{\"type\":\"button\",\"text\":{\"type\":\"plain_text\",\"text\":\"Join Discussion\"},\"url\":\"https://{{ $credentials.discourse.domain }}/t/{{ $('Create Discourse Post').item.json.topic_slug }}\"}]}]"
+            }
+          ]
+        }
+      },
+      "id": "notify-community-sync-slack",
+      "name": "Notify Community Sync via Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $credentials.wordpress.domain }}/wp-json/wp/v2/posts/{{ $json.wordpress_id }}/meta",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "wordPressApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.wordpress.apiToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "meta",
+              "value": "={\"discourse_sync_status\":\"synced\",\"discourse_topic_id\":\"{{ $('Create Discourse Post').item.json.topic_id }}\",\"discourse_sync_date\":\"{{ DateTime.now().toISO() }}\",\"discourse_topic_url\":\"https://{{ $credentials.discourse.domain }}/t/{{ $('Create Discourse Post').item.json.topic_slug }}\"}"
+            }
+          ]
+        }
+      },
+      "id": "update-wordpress-sync-metadata",
+      "name": "Update WordPress Sync Metadata",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Summarize sync results\nconst allItems = $input.all();\nconst syncedCount = allItems.length;\nconst successCount = allItems.filter(item => item.json?.topic_id).length;\nconst failCount = syncedCount - successCount;\n\nconst summary = {\n  total_articles_processed: syncedCount,\n  successfully_synced: successCount,\n  failed_syncs: failCount,\n  sync_timestamp: new Date().toISOString(),\n  sync_status: failCount === 0 ? 'completed' : 'partial_failure',\n  articles_synced: allItems.map(item => ({\n    title: item.json.title,\n    wordpress_id: item.json.wordpress_id,\n    discourse_topic_id: item.json.topic_id || 'failed',\n    status: item.json.topic_id ? 'success' : 'failed'\n  }))\n};\n\nreturn [{ json: summary }];"
+      },
+      "id": "generate-sync-summary-report",
+      "name": "Generate Sync Summary Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Knowledge Sync Scheduler": {
+      "main": [
+        [
+          {
+            "node": "Fetch Updated WordPress Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Updated WordPress Articles": {
+      "main": [
+        [
+          {
+            "node": "Check if Articles Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Articles Found": {
+      "main": [
+        [
+          {
+            "node": "Fetch Discourse Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Discourse Categories": {
+      "main": [
+        [
+          {
+            "node": "Process Articles for Discourse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Articles for Discourse": {
+      "main": [
+        [
+          {
+            "node": "Create Discourse Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Discourse Post": {
+      "main": [
+        [
+          {
+            "node": "Notify Community Sync via Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Community Sync via Slack": {
+      "main": [
+        [
+          {
+            "node": "Update WordPress Sync Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update WordPress Sync Metadata": {
+      "main": [
+        [
+          {
+            "node": "Generate Sync Summary Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "1                                   ",
+  "triggerCount": 0,
+  "tags": []
+}

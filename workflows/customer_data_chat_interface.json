@@ -1,0 +1,343 @@
+[
+  {
+    "name": "AI Customer Data Chat Interface",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "path": "customer-chat",
+          "httpMethod": "POST",
+          "options": {}
+        },
+        "id": "chat-webhook",
+        "name": "Chat Interface",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 1.2,
+        "position": [240, 300],
+        "notes": "💬 Chat endpoint: POST /webhook/customer-chat\nAccepts: { \"query\": \"Get data for customer john@example.com\" }"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "x-goog-api-key",
+                "value": "={{ $env.GEMINI_API_KEY }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "{\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"You are a customer data assistant. Analyze this query and determine what action to take:\\n\\nQuery: {{ $json.query }}\\n\\nRespond with JSON only:\\n{\\n  \\\"action\\\": \\\"freshdesk_data|intercom_data|sentiment_analysis|customer_report|general_query\\\",\\n  \\\"customer_identifier\\\": \\\"email or name if found\\\",\\n  \\\"time_period\\\": \\\"if mentioned (e.g., last 6 months)\\\",\\n  \\\"data_type\\\": \\\"tickets|conversations|profile|all\\\"\\n}\"\n    }]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.1,\n    \"maxOutputTokens\": 200\n  }\n}",
+          "options": {}
+        },
+        "id": "query-analyzer",
+        "name": "Gemini Query Analyzer",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [460, 300],
+        "notes": "🧠 Uses Gemini AI to understand user intent and extract customer details"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Parse Gemini response and structure data\nconst geminiResponse = $json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\n\ntry {\n  // Extract JSON from Gemini response\n  const jsonMatch = geminiResponse.match(/\\{[\\s\\S]*\\}/);\n  const analysis = jsonMatch ? JSON.parse(jsonMatch[0]) : {};\n  \n  return [{\n    original_query: $('Chat Interface').item.json.query,\n    action: analysis.action || 'general_query',\n    customer_identifier: analysis.customer_identifier || '',\n    time_period: analysis.time_period || '',\n    data_type: analysis.data_type || 'all',\n    gemini_raw: geminiResponse\n  }];\n} catch (error) {\n  return [{\n    original_query: $('Chat Interface').item.json.query,\n    action: 'general_query',\n    customer_identifier: '',\n    time_period: '',\n    data_type: 'all',\n    error: error.message\n  }];\n}"
+        },
+        "id": "parse-intent",
+        "name": "Parse Intent",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [680, 300],
+        "notes": "🔧 Extracts structured data from Gemini analysis"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.action }}",
+                "rightValue": "freshdesk_data",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "route-freshdesk",
+        "name": "Route to Freshdesk?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [900, 200],
+        "notes": "🎯 Routes Freshdesk-related queries"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "leftValue": "={{ $json.action }}",
+                "rightValue": "intercom_data",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "route-intercom",
+        "name": "Route to Intercom?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [900, 400],
+        "notes": "🎯 Routes Intercom-related queries"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://localhost:8000/api/tickets/search",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "{\n  \"query\": \"{{ $json.customer_identifier }}\",\n  \"limit\": 50\n}",
+          "options": {}
+        },
+        "id": "freshdesk-query",
+        "name": "Query Freshdesk MCP",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1120, 120],
+        "notes": "🎫 Fetches customer tickets from Freshdesk MCP (Port 8000)"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://localhost:9000/api/conversations/search",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "{\n  \"query\": \"{{ $json.customer_identifier }}\",\n  \"limit\": 50\n}",
+          "options": {}
+        },
+        "id": "intercom-query",
+        "name": "Query Intercom MCP",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1120, 480],
+        "notes": "💬 Fetches customer conversations from Intercom MCP (Port 9000)"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "x-goog-api-key",
+                "value": "={{ $env.GEMINI_API_KEY }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "{\n  \"contents\": [{\n    \"parts\": [{\n      \"text\": \"Analyze this customer data and provide insights:\\n\\nOriginal Query: {{ $('Parse Intent').item.json.original_query }}\\n\\nCustomer Data: {{ JSON.stringify($json) }}\\n\\nProvide:\\n1. Customer Summary\\n2. Sentiment Analysis\\n3. Key Issues/Patterns\\n4. Recommendations\\n\\nFormat as clear, actionable insights.\"\n    }]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.3,\n    \"maxOutputTokens\": 1000\n  }\n}",
+          "options": {}
+        },
+        "id": "generate-insights",
+        "name": "Generate AI Insights",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [1340, 300],
+        "notes": "🧠 Uses Gemini to analyze customer data and generate insights"
+      },
+      {
+        "parameters": {
+          "jsCode": "// Format final response for chat interface\nconst originalQuery = $('Parse Intent').item.json.original_query;\nconst geminiInsights = $json.candidates?.[0]?.content?.parts?.[0]?.text || 'No insights generated';\n\n// Get data from previous nodes\nlet customerData = {};\nlet dataSource = '';\n\n// Check if we have Freshdesk data\nif ($('Query Freshdesk MCP').item) {\n  customerData = $('Query Freshdesk MCP').item.json;\n  dataSource = 'Freshdesk';\n}\n\n// Check if we have Intercom data  \nif ($('Query Intercom MCP').item) {\n  customerData = $('Query Intercom MCP').item.json;\n  dataSource = 'Intercom';\n}\n\nreturn [{\n  query: originalQuery,\n  timestamp: new Date().toISOString(),\n  data_source: dataSource,\n  customer_data: customerData,\n  ai_insights: geminiInsights,\n  response_type: 'customer_analysis',\n  status: 'success'\n}];"
+        },
+        "id": "format-response",
+        "name": "Format Chat Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [1560, 300],
+        "notes": "📋 Formats final response for chat interface"
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ JSON.stringify($json, null, 2) }}",
+          "options": {}
+        },
+        "id": "webhook-response",
+        "name": "Send Chat Response",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [1780, 300],
+        "notes": "📤 Returns formatted response to chat interface"
+      }
+    ],
+    "connections": {
+      "Chat Interface": {
+        "main": [
+          [
+            {
+              "node": "Gemini Query Analyzer",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Gemini Query Analyzer": {
+        "main": [
+          [
+            {
+              "node": "Parse Intent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse Intent": {
+        "main": [
+          [
+            {
+              "node": "Route to Freshdesk?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Route to Intercom?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Route to Freshdesk?": {
+        "main": [
+          [
+            {
+              "node": "Query Freshdesk MCP",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Route to Intercom?": {
+        "main": [
+          [
+            {
+              "node": "Query Intercom MCP",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Query Freshdesk MCP": {
+        "main": [
+          [
+            {
+              "node": "Generate AI Insights",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Query Intercom MCP": {
+        "main": [
+          [
+            {
+              "node": "Generate AI Insights",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate AI Insights": {
+        "main": [
+          [
+            {
+              "node": "Format Chat Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Chat Response": {
+        "main": [
+          [
+            {
+              "node": "Send Chat Response",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "settings": {
+      "executionOrder": "v1",
+      "saveManualExecutions": true,
+      "callerPolicy": "workflowsFromSameOwner"
+    },
+    "staticData": null,
+    "tags": [],
+    "triggerCount": 1,
+    "updatedAt": "2025-08-18T07:17:00.000Z",
+    "versionId": "1"
+  }
+]

@@ -1,0 +1,70 @@
+# FastMCP 2.11 Production Requirements
+# Compatible with Python >=3.10, optimized for Docker deployment
+
+# ============================================================================
+# CORE MCP FRAMEWORK
+# ============================================================================
+fastmcp==2.11.3                    # Latest FastMCP with HTTP transport support
+mcp>=1.6.0                         # Official MCP Python SDK
+
+# ============================================================================
+# WEB FRAMEWORK & SERVER
+# ============================================================================
+fastapi>=0.115.0,<0.116.0          # Modern async API framework
+uvicorn[standard]>=0.30.0,<0.31.0  # ASGI server with uvloop and httptools
+pydantic>=2.8.0,<3.0.0             # Data validation and serialization
+pydantic-settings>=2.1.0,<3.0.0    # Settings management
+
+# ============================================================================
+# HTTP CLIENT & NETWORKING
+# ============================================================================
+httpx>=0.27.0,<0.28.0              # Async HTTP client for API calls
+websockets>=12.0,<13.0             # WebSocket support for real-time features
+
+# ============================================================================
+# GOOGLE GEMINI INTEGRATION
+# ============================================================================
+google-generativeai>=0.8.0,<1.0.0 # Google Gemini API client
+
+# ============================================================================
+# UTILITIES & HELPERS
+# ============================================================================
+python-dotenv>=1.0.0,<2.0.0       # Environment variable management
+python-multipart>=0.0.9,<1.0.0    # File upload support
+jinja2>=3.1.2,<4.0.0               # Template engine for UI
+aiofiles>=23.2.0,<24.0.0           # Async file operations
+
+# ============================================================================
+# LOGGING & MONITORING
+# ============================================================================
+loguru>=0.7.0,<1.0.0               # Enhanced logging with better formatting
+psutil>=5.9.0,<6.0.0               # System monitoring and health checks
+
+# ============================================================================
+# DATABASE & STORAGE (Optional - for conversation storage)
+# ============================================================================
+asyncpg>=0.29.0,<1.0.0             # Async PostgreSQL driver
+sqlalchemy>=2.0.23,<3.0.0          # ORM for database operations
+alembic>=1.12.0,<2.0.0             # Database migrations
+
+# ============================================================================
+# RAG & VECTOR DATABASE (Optional - for enhanced context)
+# ============================================================================
+chromadb>=1.0.0,<2.0.0             # Vector database for RAG
+sentence-transformers>=2.2.0,<3.0.0 # Embedding models
+numpy>=2.0.0,<3.0.0                # Numerical computing
+
+# ============================================================================
+# DEVELOPMENT & TESTING (Optional - add only for dev)
+# ============================================================================
+# pytest>=7.4.0,<8.0.0             # Testing framework
+# pytest-asyncio>=0.21.0,<1.0.0    # Async testing support
+# black>=23.0.0,<24.0.0             # Code formatting
+# ruff>=0.1.0,<1.0.0                # Fast linting and formatting
+
+# ============================================================================
+# PRODUCTION DEPLOYMENT (Optional - for advanced deployment)
+# ============================================================================
+# gunicorn>=21.2.0,<22.0.0          # WSGI server for production
+# prometheus-client>=0.17.0,<1.0.0  # Metrics collection
+# redis>=5.0.0,<6.0.0               # Caching and session storage

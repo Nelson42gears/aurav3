@@ -1,0 +1,35 @@
+[Unit]
+Description=Aura MCP Services Stack
+Documentation=https://github.com/Nelson42gears/aura
+Requires=docker.service
+After=docker.service
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/home/nelson/nebula/Aura
+User=nelson
+Group=nelson
+
+# Start the stack
+ExecStart=/bin/bash -c 'cd /home/nelson/nebula/Aura && /usr/bin/docker compose up'
+
+# Stop the stack gracefully
+ExecStop=/bin/bash -c 'cd /home/nelson/nebula/Aura && /usr/bin/docker compose down'
+
+# Security and reliability
+Restart=always
+RestartSec=30
+TimeoutStartSec=300
+TimeoutStopSec=300
+
+# Environment
+Environment=HOME=/home/nelson
+Environment=USER=nelson
+Environment=COMPOSE_PROJECT_NAME=aura
+
+[Install]
+WantedBy=multi-user.target

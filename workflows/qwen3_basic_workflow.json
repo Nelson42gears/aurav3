@@ -1,0 +1,165 @@
+{
+  "name": "Qwen3-4B-LLM-Integration",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "prompt",
+              "value": "What is artificial intelligence?"
+            },
+            {
+              "name": "temperature",
+              "value": "0.3"
+            },
+            {
+              "name": "max_tokens",
+              "value": "400"
+            }
+          ]
+        }
+      },
+      "id": "params-001",
+      "name": "Set LLM Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://0drzjvpz3v4fzy-8000.proxy.runpod.net/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "Qwen/Qwen3-4B-Thinking-2507"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\": \"system\", \"content\": \"You are a helpful AI assistant. Provide direct, accurate answers without showing your reasoning process.\"}, {\"role\": \"user\", \"content\": \"{{ $node['Set LLM Parameters'].json.prompt }}\"}]"
+            },
+            {
+              "name": "max_tokens",
+              "value": "={{ parseInt($node['Set LLM Parameters'].json.max_tokens) }}"
+            },
+            {
+              "name": "temperature",
+              "value": "={{ parseFloat($node['Set LLM Parameters'].json.temperature) }}"
+            },
+            {
+              "name": "top_p",
+              "value": 0.95
+            },
+            {
+              "name": "frequency_penalty",
+              "value": 0.3
+            },
+            {
+              "name": "stop",
+              "value": "=[\"Let me think\", \"Hmm,\", \"Okay, the user\", \"*thinking*\"]"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "llm-call-001",
+      "name": "Qwen3 LLM Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Enhanced Qwen3 Response Processing\nconst response = $input.first().json;\nconst rawContent = response.choices[0].message.content;\n\nfunction cleanQwenResponse(text) {\n    // Remove Qwen3-Thinking patterns\n    const patterns = [\n        /^(Okay|Hmm|Let me think|The user|First).*?(?=\\n|\\.|!|\\?)/gim,\n        /I (should|need to|recall|remember).*?(?=\\n|\\.|!|\\?)/gim,\n        /\\*thinking\\*.*?\\*/gim,\n        /(This seems|appears).*?(?=\\n|\\.|!|\\?)/gim\n    ];\n    \n    let cleaned = text;\n    patterns.forEach(pattern => {\n        cleaned = cleaned.replace(pattern, '');\n    });\n    \n    cleaned = cleaned.replace(/\\n\\s*\\n/g, '\\n').trim();\n    \n    // Extract meaningful answers for math/factual queries\n    if (text.includes('x') || text.includes('*') || text.includes('+') || text.includes('-')) {\n        const mathResult = text.match(/\\b(\\d+(?:\\.\\d+)?)\\b/);\n        if (mathResult) return mathResult[1];\n    }\n    \n    // Extract city names for geography\n    if (text.toLowerCase().includes('capital')) {\n        const cities = text.match(/\\b[A-Z][a-z]+(?:\\s+[A-Z][a-z]+)?\\b/g);\n        if (cities) {\n            for (const city of cities) {\n                if (!['Let', 'Okay', 'The', 'I', 'This', 'First'].includes(city)) {\n                    return city;\n                }\n            }\n        }\n    }\n    \n    return cleaned || text;\n}\n\nconst cleanResponse = cleanQwenResponse(rawContent);\n\nreturn [{\n    json: {\n        success: true,\n        llm_response: cleanResponse,\n        raw_response: rawContent,\n        metadata: {\n            model: response.model,\n            tokens_used: response.usage.total_tokens,\n            timestamp: new Date().toISOString(),\n            prompt_tokens: response.usage.prompt_tokens,\n            completion_tokens: response.usage.completion_tokens\n        }\n    }\n}];\n                        "
+      },
+      "id": "processor-001",
+      "name": "Clean LLM Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set LLM Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set LLM Parameters": {
+      "main": [
+        [
+          {
+            "node": "Qwen3 LLM Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen3 LLM Call": {
+      "main": [
+        [
+          {
+            "node": "Clean LLM Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    "llm",
+    "qwen3",
+    "ai",
+    "cli-created"
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-08-13T13:59:27.510323",
+  "versionId": "1"
+}

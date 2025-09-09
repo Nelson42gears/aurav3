@@ -1,0 +1,276 @@
+{
+  "createdAt": "2025-08-10T17:12:34.537Z",
+  "updatedAt": "2025-08-10T17:12:34.537Z",
+  "id": "UL2zsRZgw1818FEp",
+  "name": "Knowledge Base to Community Sync",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wordpress-webhook",
+        "options": {}
+      },
+      "id": "wordpress-webhook-trigger",
+      "name": "WordPress Article Published Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "wordpress-article-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "published-status-check",
+              "leftValue": "={{ $json.post.status }}",
+              "rightValue": "publish",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-published-status",
+      "name": "Check Published Status",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://your-wordpress-site.com/wp-json/wp/v2/posts/{{ $('WordPress Article Published Webhook').item.json.post.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "wordpressApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.wordpress.token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-article-content",
+      "name": "Get Article Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://your-discourse-site.com/posts.json",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "discourseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Api-Key",
+              "value": "{{ $credentials.discourse.api_key }}"
+            },
+            {
+              "name": "Api-Username",
+              "value": "{{ $credentials.discourse.username }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "=New Article: {{ $('Get Article Content').item.json.title.rendered }}"
+            },
+            {
+              "name": "raw",
+              "value": "=A new knowledge base article has been published! 📚\n\n**{{ $('Get Article Content').item.json.title.rendered }}**\n\nRead the full article here: {{ $('Get Article Content').item.json.link }}\n\n---\n*This topic was automatically created when a new article was published on our knowledge base.*"
+            },
+            {
+              "name": "category",
+              "value": "9"
+            },
+            {
+              "name": "tags",
+              "value": "knowledge-base,auto-sync"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-discourse-topic",
+      "name": "Create Discourse Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=📚 New Knowledge Base Article Published: {{ $('Get Article Content').item.json.title.rendered }}"
+            },
+            {
+              "name": "blocks",
+              "value": "=[{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"📚 *New Knowledge Base Article Published*\\n\\n*{{ $('Get Article Content').item.json.title.rendered }}*\\n\\n<{{ $('Get Article Content').item.json.link }}|Read Article> | <{{ $('Create Discourse Topic').item.json.topic_slug }}|Discuss on Community>\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"Automatically synced to community forum\"}]}]"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notify-team-slack",
+      "name": "Notify Team on Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/YOUR_CONTENT_LOG_SHEET_ID/values/PublishedArticles:append",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "valueInputOption",
+              "value": "RAW"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "values",
+              "value": "=[[\"{{ $now }}\", \"{{ $('Get Article Content').item.json.title.rendered }}\", \"{{ $('Get Article Content').item.json.link }}\", \"{{ $('Create Discourse Topic').item.json.topic_id }}\", \"{{ $('Get Article Content').item.json.author }}\", \"synced\"]]"
+            }
+          ]
+        }
+      },
+      "id": "log-content-sync",
+      "name": "Log Content Sync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "WordPress Article Published Webhook": {
+      "main": [
+        [
+          {
+            "node": "Check Published Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Published Status": {
+      "main": [
+        [
+          {
+            "node": "Get Article Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Article Content": {
+      "main": [
+        [
+          {
+            "node": "Create Discourse Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Discourse Topic": {
+      "main": [
+        [
+          {
+            "node": "Notify Team on Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Team on Slack": {
+      "main": [
+        [
+          {
+            "node": "Log Content Sync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "versionId": "1                                   ",
+  "triggerCount": 0,
+  "tags": []
+}
