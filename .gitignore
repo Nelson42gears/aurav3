@@ -25,6 +25,10 @@ venv/
 *.gz
 *.sql
 
+# Local tooling artifacts
+ bfg.jar
+ sensitive.txt
+
 # Node (React client)
 docker/client/node_modules/
 docker/client/dist/
